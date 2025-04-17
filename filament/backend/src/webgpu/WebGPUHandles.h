@@ -27,28 +27,39 @@
 
 #include <webgpu/webgpu_cpp.h>
 
+#include <array>
 #include <cstdint>
 
 namespace filament::backend {
 
+struct WGPUProgram : public HwProgram {
+    WGPUProgram(wgpu::Device&, Program&);
+
+    wgpu::ShaderModule vertexShaderModule = nullptr;
+    wgpu::ShaderModule fragmentShaderModule = nullptr;
+    wgpu::ShaderModule computeShaderModule = nullptr;
+    utils::FixedCapacityVector<wgpu::ConstantEntry> constants = {};
+};
+
 struct WGPUBufferObject;
-// TODO: Currently WGPUVertexBufferInfo is not used by WebGPU for useful task.
-// Update the struct when used by WebGPU driver.
+
+// VertexBufferInfo contains layout info for Vertex Buffer based on WebGPU structs. In WebGPU each
+// VertexBufferLayout is associated with a single vertex buffer. So number of mVertexBufferLayout
+// is equal to bufferCount. Each VertexBufferLayout can contain multiple VertexAttribute. Bind index
+// of vertex buffer is implicitly calculated by the position of VertexBufferLayout in an array.
 struct WGPUVertexBufferInfo : public HwVertexBufferInfo {
     WGPUVertexBufferInfo(uint8_t bufferCount, uint8_t attributeCount,
-            AttributeArray const& attributes)
-        : HwVertexBufferInfo(bufferCount, attributeCount),
-          attributes(attributes) {}
-    AttributeArray attributes;
+            AttributeArray const& attributes);
+
+    std::array<wgpu::VertexAttribute, MAX_VERTEX_ATTRIBUTE_COUNT> vertexAttributes = {};
+    std::array<wgpu::VertexBufferLayout, MAX_VERTEX_BUFFER_COUNT> vertexBufferLayouts = {};
 };
 
 struct WGPUVertexBuffer : public HwVertexBuffer {
     WGPUVertexBuffer(wgpu::Device const &device, uint32_t vextexCount, uint32_t bufferCount,
-                     Handle<WGPUVertexBufferInfo> vbih);
+                     Handle<HwVertexBufferInfo> vbih);
 
-    void setBuffer(WGPUBufferObject *bufferObject, uint32_t index);
-
-    Handle<WGPUVertexBufferInfo> vbih;
+    Handle<HwVertexBufferInfo> vbih;
     utils::FixedCapacityVector<wgpu::Buffer> buffers;
 };
 
@@ -57,16 +68,19 @@ struct WGPUIndexBuffer : public HwIndexBuffer {
                     uint32_t indexCount);
 
     wgpu::Buffer buffer;
+    wgpu::IndexFormat indexFormat;
 };
 
 // TODO: Currently WGPUVertexBufferInfo is not used by WebGPU for useful task.
 // Update the struct when used by WebGPU driver.
 struct WGPUBufferObject : HwBufferObject {
-    WGPUBufferObject(BufferObjectBinding bindingType, uint32_t byteCount);
+    WGPUBufferObject(wgpu::Device const& device, BufferObjectBinding bindingType,
+            uint32_t byteCount);
 
     wgpu::Buffer buffer;
     const BufferObjectBinding bufferObjectBinding;
 };
+
 class WebGPUDescriptorSetLayout : public HwDescriptorSetLayout {
 public:
     WebGPUDescriptorSetLayout(DescriptorSetLayout const& layout, wgpu::Device const& device);
@@ -95,8 +109,8 @@ struct WGPUTexture : public HwTexture {
 struct WGPURenderPrimitive : public HwRenderPrimitive {
     WGPURenderPrimitive();
 
-    void setBuffers(WGPUVertexBufferInfo const* const vbi,
-            WGPUVertexBuffer* vertexBuffer, WGPUIndexBuffer* indexBuffer);
+    void setBuffers(WGPUVertexBufferInfo const* const vbi, WGPUVertexBuffer* vertexBuffer,
+            WGPUIndexBuffer* indexBuffer);
 
     WGPUVertexBuffer* vertexBuffer = nullptr;
     WGPUIndexBuffer* indexBuffer = nullptr;

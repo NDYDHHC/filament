@@ -44,7 +44,7 @@
 #define HandleAllocatorVK   HandleAllocator<64, 160, 312>    // ~1820 / pool / MiB
 #define HandleAllocatorMTL  HandleAllocator<32,  64, 552>    // ~1660 / pool / MiB
 // TODO WebGPU examine right size of handles
-#define HandleAllocatorWGPU HandleAllocator<64, 160, 552>    // ~1820 / pool / MiB
+#define HandleAllocatorWGPU HandleAllocator<64, 160, 1160>    // ~1820 / pool / MiB
 
 namespace filament::backend {
 

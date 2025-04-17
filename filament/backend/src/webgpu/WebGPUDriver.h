@@ -18,6 +18,7 @@
 #define TNT_FILAMENT_BACKEND_WEBGPUDRIVER_H
 
 #include "WebGPUHandles.h"
+#include "WebGPUPipelineCache.h"
 #include <backend/platforms/WebGPUPlatform.h>
 
 #include "DriverBase.h"
@@ -68,6 +69,8 @@ private:
     wgpu::CommandEncoder mCommandEncoder = nullptr;
     wgpu::TextureView mTextureView = nullptr;
     wgpu::RenderPassEncoder mRenderPassEncoder = nullptr;
+    WebGPURenderPipelineRequirements mCurrentRenderPipelineReqs = {};
+    WebGPUPipelineCache mPipelineCache = {};
     wgpu::CommandBuffer mCommandBuffer = nullptr;
     WGPURenderTarget* mDefaultRenderTarget = nullptr;
     /*
@@ -112,7 +115,7 @@ private:
     template<typename D, typename B>
     void destructHandle(Handle<B>& handle) noexcept {
         auto* p = mHandleAllocator.handle_cast<D*>(handle);
-        return mHandleAllocator.deallocate(handle, p);
+        mHandleAllocator.deallocate(handle, p);
     }
 };
 

@@ -26,6 +26,13 @@
 
 namespace utils::hash {
 
+// from https://stackoverflow.com/questions/2590677 (inspired from Boost with tweaks)
+template<typename T, typename... Rest>
+void combine(std::size_t& seed, const T& v, const Rest&... rest) {
+    seed ^= std::hash<T>{}(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    (combine(seed, rest), ...);
+}
+
 inline size_t combine(size_t lhs, size_t rhs) noexcept {
     std::pair<size_t, size_t> const p{ lhs, rhs };
     return std::hash<std::string_view>{}({ (char*)&p, sizeof(p) });

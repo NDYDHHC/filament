@@ -16,6 +16,7 @@
 
 #include "webgpu/WebGPUDriver.h"
 
+#include "WebGPUPipelineCache.h"
 #include "WebGPUSwapChain.h"
 #include "webgpu/WebGPUConstants.h"
 #include <backend/platforms/WebGPUPlatform.h>
@@ -28,6 +29,7 @@
 
 #include <math/mat3.h>
 #include <utils/CString.h>
+#include <utils/Panic.h>
 #include <utils/ostream.h>
 
 #include <dawn/webgpu_cpp_print.h>
@@ -184,8 +186,6 @@ void printAdapterDetails(wgpu::Adapter const& adapter) {
 }
 #endif
 
-
-
 #if FWGPU_ENABLED(FWGPU_PRINT_SYSTEM)
 void printDeviceDetails(wgpu::Device const& device) {
     wgpu::SupportedFeatures supportedFeatures{};
@@ -210,6 +210,100 @@ void printDeviceDetails(wgpu::Device const& device) {
     }
 }
 #endif
+
+constexpr wgpu::PrimitiveTopology toWebGPU(PrimitiveType primitiveType) {
+    switch (primitiveType) {
+        case PrimitiveType::POINTS:
+            return wgpu::PrimitiveTopology::PointList;
+        case PrimitiveType::LINES:
+            return wgpu::PrimitiveTopology::LineList;
+        case PrimitiveType::LINE_STRIP:
+            return wgpu::PrimitiveTopology::LineStrip;
+        case PrimitiveType::TRIANGLES:
+            return wgpu::PrimitiveTopology::TriangleList;
+        case PrimitiveType::TRIANGLE_STRIP:
+            return wgpu::PrimitiveTopology::TriangleStrip;
+    }
+}
+
+constexpr wgpu::CullMode toWebGPU(CullingMode cullMode) {
+    switch (cullMode) {
+        case CullingMode::NONE:
+            return wgpu::CullMode::None;
+        case CullingMode::FRONT:
+            return wgpu::CullMode::Front;
+        case CullingMode::BACK:
+            return wgpu::CullMode::Back;
+        case CullingMode::FRONT_AND_BACK:
+            // no WegGPU equivalent of front and back
+            FILAMENT_CHECK_POSTCONDITION(false)
+                    << "WebGPU does not support CullingMode::FRONT_AND_BACK";
+            return wgpu::CullMode::Undefined;
+    }
+}
+
+constexpr wgpu::BlendOperation toWebGPU(BlendEquation blendOp) {
+    switch (blendOp) {
+        case BlendEquation::ADD:
+            return wgpu::BlendOperation::Add;
+        case BlendEquation::SUBTRACT:
+            return wgpu::BlendOperation::Subtract;
+        case BlendEquation::REVERSE_SUBTRACT:
+            return wgpu::BlendOperation::ReverseSubtract;
+        case BlendEquation::MIN:
+            return wgpu::BlendOperation::Min;
+        case BlendEquation::MAX:
+            return wgpu::BlendOperation::Max;
+    }
+}
+
+constexpr wgpu::BlendFactor toWebGPU(BlendFunction blendFunction) {
+    switch (blendFunction) {
+        case BlendFunction::ZERO:
+            return wgpu::BlendFactor::Zero;
+        case BlendFunction::ONE:
+            return wgpu::BlendFactor::One;
+        case BlendFunction::SRC_COLOR:
+            return wgpu::BlendFactor::Src;
+        case BlendFunction::ONE_MINUS_SRC_COLOR:
+            return wgpu::BlendFactor::OneMinusSrc;
+        case BlendFunction::DST_COLOR:
+            return wgpu::BlendFactor::Dst;
+        case BlendFunction::ONE_MINUS_DST_COLOR:
+            return wgpu::BlendFactor::OneMinusDst;
+        case BlendFunction::SRC_ALPHA:
+            return wgpu::BlendFactor::SrcAlpha;
+        case BlendFunction::ONE_MINUS_SRC_ALPHA:
+            return wgpu::BlendFactor::OneMinusSrcAlpha;
+        case BlendFunction::DST_ALPHA:
+            return wgpu::BlendFactor::DstAlpha;
+        case BlendFunction::ONE_MINUS_DST_ALPHA:
+            return wgpu::BlendFactor::OneMinusDstAlpha;
+        case BlendFunction::SRC_ALPHA_SATURATE:
+            return wgpu::BlendFactor::SrcAlphaSaturated;
+    }
+}
+
+constexpr wgpu::CompareFunction toWebGPU(SamplerCompareFunc compareFunction) {
+    switch (compareFunction) {
+        case SamplerCompareFunc::LE:
+            return wgpu::CompareFunction::LessEqual;
+        case SamplerCompareFunc::GE:
+            return wgpu::CompareFunction::GreaterEqual;
+        case SamplerCompareFunc::L:
+            return wgpu::CompareFunction::Less;
+        case SamplerCompareFunc::G:
+            return wgpu::CompareFunction::Greater;
+        case SamplerCompareFunc::E:
+            return wgpu::CompareFunction::Equal;
+        case SamplerCompareFunc::NE:
+            return wgpu::CompareFunction::NotEqual;
+        case SamplerCompareFunc::A:
+            return wgpu::CompareFunction::Always;
+        case SamplerCompareFunc::N:
+            return wgpu::CompareFunction::Never;
+    }
+}
 
 }// namespace
 
@@ -262,6 +356,7 @@ template class ConcreteDispatcher<WebGPUDriver>;
 
 
 void WebGPUDriver::terminate() {
+    mCurrentRenderPipelineReqs = {};
 }
 
 void WebGPUDriver::tick(int) {
@@ -286,6 +381,8 @@ void WebGPUDriver::setPresentationTime(int64_t monotonic_clock_ns) {
 }
 
 void WebGPUDriver::endFrame(uint32_t frameId) {
+    mPipelineCache.gc();
+    mCurrentRenderPipelineReqs = {};
 }
 
 void WebGPUDriver::flush(int) {
@@ -319,12 +416,18 @@ void WebGPUDriver::destroyIndexBuffer(Handle<HwIndexBuffer> ibh) {
 }
 
 void WebGPUDriver::destroyBufferObject(Handle<HwBufferObject> boh) {
+    if (boh) {
+        destructHandle<WGPUBufferObject>(boh);
+    }
 }
 
 void WebGPUDriver::destroyTexture(Handle<HwTexture> th) {
 }
 
 void WebGPUDriver::destroyProgram(Handle<HwProgram> ph) {
+    if (ph) {
+        destructHandle<WGPUProgram>(ph);
+    }
 }
 
 void WebGPUDriver::destroyRenderTarget(Handle<HwRenderTarget> rth) {
@@ -369,7 +472,7 @@ Handle<HwTexture> WebGPUDriver::importTextureS() noexcept {
 }
 
 Handle<HwProgram> WebGPUDriver::createProgramS() noexcept {
-    return Handle<HwProgram>((Handle<HwProgram>::HandleId) mNextFakeHandle++);
+    return allocHandle<WGPUProgram>();
 }
 
 Handle<HwFence> WebGPUDriver::createFenceS() noexcept {
@@ -464,16 +567,27 @@ void WebGPUDriver::createSwapChainHeadlessR(Handle<HwSwapChain> sch, uint32_t wi
         uint32_t height, uint64_t flags) {}
 
 void WebGPUDriver::createVertexBufferInfoR(Handle<HwVertexBufferInfo> vbih, uint8_t bufferCount,
-        uint8_t attributeCount, AttributeArray attributes) {}
+        uint8_t attributeCount, AttributeArray attributes) {
+    constructHandle<WGPUVertexBufferInfo>(vbih, bufferCount, attributeCount, attributes);
+}
 
 void WebGPUDriver::createVertexBufferR(Handle<HwVertexBuffer> vbh, uint32_t vertexCount,
-        Handle<HwVertexBufferInfo> vbih) {}
+        Handle<HwVertexBufferInfo> vbih) {
+    auto* vertexBufferInfo = handleCast<WGPUVertexBufferInfo>(vbih);
+    constructHandle<WGPUVertexBuffer>(vbh, mDevice, vertexCount, vertexBufferInfo->bufferCount,
+            vbih);
+}
 
 void WebGPUDriver::createIndexBufferR(Handle<HwIndexBuffer> ibh, ElementType elementType,
-        uint32_t indexCount, BufferUsage usage) {}
+        uint32_t indexCount, BufferUsage usage) {
+    auto elementSize = static_cast<uint8_t>(getElementTypeSize(elementType));
+    constructHandle<WGPUIndexBuffer>(ibh, mDevice, elementSize, indexCount);
+}
 
 void WebGPUDriver::createBufferObjectR(Handle<HwBufferObject> boh, uint32_t byteCount,
-        BufferObjectBinding bindingType, BufferUsage usage) {}
+        BufferObjectBinding bindingType, BufferUsage usage) {
+    constructHandle<WGPUBufferObject>(boh, mDevice, bindingType, byteCount);
+}
 
 void WebGPUDriver::createTextureR(Handle<HwTexture> th, SamplerType target, uint8_t levels,
         TextureFormat format, uint8_t samples, uint32_t w, uint32_t h, uint32_t depth,
@@ -505,7 +619,11 @@ void WebGPUDriver::importTextureR(Handle<HwTexture> th, intptr_t id, SamplerType
 void WebGPUDriver::createRenderPrimitiveR(Handle<HwRenderPrimitive> rph, Handle<HwVertexBuffer> vbh,
         Handle<HwIndexBuffer> ibh, PrimitiveType pt) {}
 
-void WebGPUDriver::createProgramR(Handle<HwProgram> ph, Program&& program) {}
+void WebGPUDriver::createProgramR(Handle<HwProgram> ph, Program&& program) {
+    assert_invariant(mDevice);
+    auto* wgpuProgram = constructHandle<WGPUProgram>(ph, mDevice, program);
+    assert_invariant(wgpuProgram);
+}
 
 void WebGPUDriver::createDefaultRenderTargetR(Handle<HwRenderTarget> rth, int) {
     assert_invariant(!mDefaultRenderTarget);
@@ -677,7 +795,8 @@ void WebGPUDriver::setVertexBufferObject(Handle<HwVertexBuffer> vbh, uint32_t in
     auto* vertexBuffer = handleCast<WGPUVertexBuffer>(vbh);
     auto* bufferObject = handleCast<WGPUBufferObject>(boh);
     assert_invariant(index < vertexBuffer->buffers.size());
-    vertexBuffer->setBuffer(bufferObject, index);
+    assert_invariant(bufferObject->buffer.GetUsage() == wgpu::BufferUsage::Vertex);
+    vertexBuffer->buffers[index] = bufferObject->buffer;
 }
 
 void WebGPUDriver::update3DImage(Handle<HwTexture> th,
@@ -825,12 +944,56 @@ void WebGPUDriver::blit(
 }
 
 void WebGPUDriver::bindPipeline(PipelineState const& pipelineState) {
+    auto* program = handleCast<WGPUProgram>(pipelineState.program);
+    FILAMENT_CHECK_POSTCONDITION(program->computeShaderModule == nullptr)
+            << "WebGPU backend does not (yet) support compute pipelines.";
+    FILAMENT_CHECK_POSTCONDITION(program->vertexShaderModule != nullptr)
+            << "WebGPU backend requires a vertex shader module for a render pipeline";
+    RasterState const& rasterState = pipelineState.rasterState;
+    mCurrentRenderPipelineReqs.vertexShaderModule = program->vertexShaderModule;
+    mCurrentRenderPipelineReqs.fragmentShaderModule = program->fragmentShaderModule;
+    auto* vertexBufferInfo = handleCast<WGPUVertexBufferInfo>(pipelineState.vertexBufferInfo);
+    assert_invariant(vertexBufferInfo);
+    mCurrentRenderPipelineReqs.vertexAttributes = vertexBufferInfo->vertexAttributes;
+    mCurrentRenderPipelineReqs.vertexBufferLayouts = vertexBufferInfo->vertexBufferLayouts;
+    mCurrentRenderPipelineReqs.vertexBufferCount = vertexBufferInfo->bufferCount;
+    mCurrentRenderPipelineReqs.constants = program->constants;
+    mCurrentRenderPipelineReqs.topology = toWebGPU(pipelineState.primitiveType);
+    mCurrentRenderPipelineReqs.cullMode = toWebGPU(rasterState.culling);
+    mCurrentRenderPipelineReqs.frontFace =
+            rasterState.inverseFrontFaces ? wgpu::FrontFace::CW : wgpu::FrontFace::CCW;
+    mCurrentRenderPipelineReqs.blendEnable = rasterState.hasBlending();
+    mCurrentRenderPipelineReqs.depthWriteEnabled = rasterState.depthWrite;
+    mCurrentRenderPipelineReqs.alphaToCoverageEnabled = rasterState.alphaToCoverage;
+    mCurrentRenderPipelineReqs.blendState = {
+        .color = {
+            .operation = toWebGPU(rasterState.blendEquationRGB),
+            .srcFactor = toWebGPU(rasterState.blendFunctionSrcRGB),
+            .dstFactor = toWebGPU(rasterState.blendFunctionDstRGB)
+        },
+        .alpha = {
+            .operation = toWebGPU(rasterState.blendEquationAlpha),
+            .srcFactor = toWebGPU(rasterState.blendFunctionSrcAlpha),
+            .dstFactor = toWebGPU(rasterState.blendFunctionDstAlpha)
+        }
+    };
+    mCurrentRenderPipelineReqs.colorWriteMask =
+            rasterState.colorWrite ? wgpu::ColorWriteMask::All : wgpu::ColorWriteMask::None;
+    // TODO mCurrentRenderPipelineReqs.multisampleCount = ???; // from render target?
+    // TODO no depth clamp in WebGPU supported directly. unclippedDepth is close, so we are
+    //      starting there
+    mCurrentRenderPipelineReqs.unclippedDepth = !rasterState.depthClamp;
+    // TODO mCurrentRenderPipelineReqs.colorTargetCount = ???; // from render target?
+    mCurrentRenderPipelineReqs.depthCompare = toWebGPU(rasterState.depthFunc);
+    mCurrentRenderPipelineReqs.depthBias =
 }
 
 void WebGPUDriver::bindRenderPrimitive(Handle<HwRenderPrimitive> rph) {
 }
 
 void WebGPUDriver::draw2(uint32_t indexOffset, uint32_t indexCount, uint32_t instanceCount) {
+    assert_invariant(mRenderPassEncoder);
+    mRenderPassEncoder.DrawIndexed(indexCount, instanceCount, indexOffset, 0, 0);
 }
 
 void WebGPUDriver::draw(PipelineState pipelineState, Handle<HwRenderPrimitive> rph,
@@ -875,6 +1038,7 @@ void WebGPUDriver::bindDescriptorSet(
 }
 
 void WebGPUDriver::setDebugTag(HandleBase::HandleId handleId, utils::CString tag) {
+    mHandleAllocator.associateTagToHandle(handleId, std::move(tag));
 }
 
 } // namespace filament
