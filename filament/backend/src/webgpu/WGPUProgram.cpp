@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -129,6 +130,35 @@ namespace {
     if (sourceBytes.empty()) {
         return nullptr;// nothing to compile, the shader was not provided
     }
+
+    bool testing = false;
+    int32_t oldNumber = 0;
+    int32_t newNumber = 0;
+    const std::string patternStr = std::string("FILAMENT_SPEC_CONST_0_") + R"(\w*\s*=\s*([^;]+);)";
+    const std::regex regexPattern(patternStr);
+    const std::string originalSource = reinterpret_cast<const char*>(sourceBytes.data());
+    if (originalSource.find("FILAMENT_SPEC_CONST_0_") != std::string::npos &&
+            specConstants.find(0) != specConstants.end()) {
+        FWGPU_LOGD << "spec constant 0 is in the shader AND the constants to override"
+                   << utils::io::endl;
+        std::smatch match;
+        if (std::regex_search(originalSource, match, regexPattern)) {
+            const std::string oldValue = match[1].str();
+            oldNumber = static_cast<int32_t>(std::atoi(oldValue.data()));
+            const std::variant<int32_t, float, bool> v = specConstants.at(0);
+            newNumber = std::get<int32_t>(v);
+            if (oldNumber != newNumber) {
+                FWGPU_LOGD << "shader has " << oldNumber << " value to override is " << newNumber
+                           << utils::io::endl;
+                testing = true;
+            }
+        }
+        if (!testing) {
+            FWGPU_LOGD << "shader has the same value as the one to be replaced. not checking it."
+                       << utils::io::endl;
+        }
+    }
+
     std::stringstream labelStream;
     labelStream << programName << " " << filamentShaderStageToString(stage) << " shader";
     auto label = labelStream.str();
@@ -143,6 +173,34 @@ namespace {
         .nextInChain = &wgslDescriptor,
         .label = label.data()
     };
+
+    if (testing) {
+        const std::string originalSourceAgain = reinterpret_cast<const char*>(sourceBytes.data());
+        std::smatch match;
+        int checked = 0;
+        if (std::regex_search(originalSourceAgain, match, regexPattern)) {
+            const std::string oldValue = match[1].str();
+            const int32_t oldNumberAgain = static_cast<int32_t>(std::atoi(oldValue.data()));
+            assert_invariant(
+                    oldNumber == oldNumberAgain &&
+                    "the original source code value should not have changed! (constant 0)");
+            checked++;
+        }
+        if (std::regex_search(processedShaderSource, match, regexPattern)) {
+            const std::string newValue = match[1].str();
+            const int32_t newNumberAgain = static_cast<int32_t>(std::atoi(newValue.data()));
+            assert_invariant(newNumber == newNumberAgain &&
+                             "the processed source code value should have changed! (constant 0)");
+            checked++;
+        }
+        assert_invariant(
+                checked == 2 &&
+                "did not find old and new values in the old and processed shader source code?");
+        FWGPU_LOGD << "The original source value was unchanged as expected (" << oldNumber
+                   << ") and the processed source value changed as expected (" << newNumber << ")"
+                   << utils::io::endl;
+    }
+
     wgpu::ShaderModule module = device.CreateShaderModule(&descriptor);
     FILAMENT_CHECK_POSTCONDITION(module != nullptr) << "Failed to create " << descriptor.label;
 
@@ -220,6 +278,9 @@ WGPUProgram::WGPUProgram(wgpu::Device& device, Program& program)
     : HwProgram(program.getName()) {
     std::unordered_map<uint32_t, std::variant<int32_t, float, bool>> specConstants;
     toMap(program.getSpecializationConstants(), specConstants);
+    if (specConstants.find(0) != specConstants.end()) {
+        specConstants[0] = 42;
+    }
     vertexShaderModule = createShaderModule(device, program, ShaderStage::VERTEX, specConstants);
     fragmentShaderModule =
             createShaderModule(device, program, ShaderStage::FRAGMENT, specConstants);
