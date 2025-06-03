@@ -45,44 +45,43 @@ public:
 
 
 // WGPUVertexBufferInfo maps Filament vertex attributes to WebGPU buffer binding model.
-class WGPUVertexBufferInfo : public HwVertexBufferInfo {
+class WGPUVertexBufferInfo final : public HwVertexBufferInfo {
 public:
-    WGPUVertexBufferInfo(uint8_t bufferCount, uint8_t attributeCount,
-            AttributeArray const& attributes);
+    WGPUVertexBufferInfo(uint8_t bufferCount, uint8_t attributeCount, AttributeArray const&,
+            wgpu::Limits const&);
 
-    inline wgpu::VertexBufferLayout const* getVertexBufferLayouts() const {
+    [[nodiscard]] inline wgpu::VertexBufferLayout const* getVertexBufferLayouts() const {
         return mVertexBufferLayouts.data();
     }
-    inline uint32_t getVertexBufferLayoutCount() const {
-        return static_cast<uint32_t>(mVertexBufferLayouts.size());
+
+    [[nodiscard]] inline size_t getVertexBufferLayoutCount() const {
+        return mVertexBufferLayouts.size();
     }
 
-    inline wgpu::VertexAttribute const* getVertexAttributes(uint32_t i) const {
-        return mVertexAttributes[i].data();
-    }
-    inline uint32_t getVertexAttributeCount(uint32_t i) const {
-        return static_cast<uint32_t>(mVertexAttributes[i].size());
-    }
-
-    struct WebGPUSlotBindingInfo {
-        uint8_t sourceBuffer;
-        uint32_t slot;
-        uint64_t bufferOffset;
-        uint32_t stride;
+    struct WebGPUSlotBindingInfo final {
+        uint8_t sourceBufferIndex = 0; // limited by filament::backend::Attribute::buffer
+        uint32_t bufferOffset = 0;     // limited by filament::backend::Attribute::offset
+        uint8_t stride = 0;            // limited by filament::backend::Attribute::stride
     };
-    inline const std::vector<WebGPUSlotBindingInfo>& getWebGPUSlotBindingInfos() const {
+
+    [[nodiscard]] inline std::vector<WebGPUSlotBindingInfo> const&
+    getWebGPUSlotBindingInfos() const {
         return mWebGPUSlotBindingInfos;
     }
 
 private:
     // This stores the final wgpu::VertexBufferLayout objects, one per WebGPU slot.
+    // (this is a vector and not an array due to size limitations of the handle in the handle
+    // allocator)
     std::vector<wgpu::VertexBufferLayout> mVertexBufferLayouts;
 
-    // This stores all wgpu::VertexAttribute structs, indexed by their original
-    // Filament attributeIndex.
-    std::vector<std::vector<wgpu::VertexAttribute>> mVertexAttributes;
+    // (this is a vector and not an array due to size limitations of the handle in the handle
+    // allocator)
+    std::vector<wgpu::VertexAttribute> mVertexAttributes;
 
     // Stores information for the driver to perform setVertexBuffer calls
+    // (this is a vector and not an array due to size limitations of the handle in the handle
+    // allocator)
     std::vector<WebGPUSlotBindingInfo> mWebGPUSlotBindingInfos;
 };
 
