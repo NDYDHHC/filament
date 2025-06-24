@@ -40,6 +40,7 @@ public:
     [[nodiscard]] size_t getBlockHeight() const { return mBlockHeight; }
 
     [[nodiscard]] wgpu::Texture const& getTexture() const { return mTexture; }
+    [[nodiscard]] wgpu::Texture getResolveTexture() const { return mResolveTexture; }
 
     [[nodiscard]] wgpu::TextureView const& getDefaultTextureView() const {
         if (mResolveTextureView) {

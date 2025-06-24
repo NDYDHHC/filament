@@ -37,9 +37,9 @@ public:
     [[nodiscard]] wgpu::TextureFormat getDepthFormat() const { return mDepthFormat; }
 
     [[nodiscard]] wgpu::TextureView getCurrentSurfaceTextureView(wgpu::Extent2D const&);
+    [[nodiscard]] wgpu::Texture getTexture() const { return mCurrentSurfaceTexture; }
 
     [[nodiscard]] wgpu::TextureView getDepthTextureView() const { return mDepthTextureView; }
-
     void present();
 
 private:
@@ -52,6 +52,8 @@ private:
     wgpu::TextureFormat mDepthFormat = wgpu::TextureFormat::Undefined;
     wgpu::Texture mDepthTexture = nullptr;
     wgpu::TextureView mDepthTextureView = nullptr;
+    wgpu::Texture mCurrentSurfaceTexture = nullptr; // NEW MEMBER TO STORE THE CURRENT SURFACE TEXTURE
+
 };
 
 } // namespace filament::backend

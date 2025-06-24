@@ -35,6 +35,8 @@ WebGPURenderTarget::WebGPURenderTarget(const uint32_t width, const uint32_t heig
         Attachment const& depthAttachmentInfo, Attachment const& stencilAttachmentInfo,
         TargetBufferFlags  targets)
     : HwRenderTarget{ width, height },
+      mWidth{width},
+      mHeight{height},
       mDefaultRenderTarget{ false },
       mSamples{ samples },
       mLayerCount{ layerCount },
@@ -88,17 +90,18 @@ void WebGPURenderTarget::setUpRenderPassAttachments(wgpu::RenderPassDescriptor& 
     mHasDepthStencilAttachment = false;
 
     if (mDefaultRenderTarget) {
+        printf("mDefaultRenderTarget is true\n");
+
         assert_invariant(defaultColorTextureView);
         mColorAttachmentDescriptors.push_back({ .view = defaultColorTextureView,
             .resolveTarget = nullptr,
-            .loadOp = WebGPURenderTarget::getLoadOperation(params, TargetBufferFlags::COLOR0),
-            .storeOp = WebGPURenderTarget::getStoreOperation(params, TargetBufferFlags::COLOR0),
-            .clearValue = {1.0f, 0.0f, 0.0f, 0.0f}
-//            .clearValue = {
-//                .r = params.clearColor.r,
-//                .g = params.clearColor.g,
-//                .b = params.clearColor.b,
-//                .a = params.clearColor.a }
+            .loadOp = WebGPURenderTarget::getLoadOperation(params, TargetBufferFlags::COLOR),
+            .storeOp = WebGPURenderTarget::getStoreOperation(params, TargetBufferFlags::COLOR),
+            .clearValue = {
+                .r = params.clearColor.r,
+                .g = params.clearColor.g,
+                .b = params.clearColor.b,
+                .a = params.clearColor.a }
         });
 
         bool const depthReadOnly =
@@ -133,6 +136,7 @@ void WebGPURenderTarget::setUpRenderPassAttachments(wgpu::RenderPassDescriptor& 
             mHasDepthStencilAttachment = true;
         }
     } else { // Custom Render Target
+        printf("Not the mDefaultRenderTarget\n");
         for (uint32_t i = 0; i < customColorTextureViewCount; ++i) {
             if (customColorTextureViews[i]) {
                 // Determine the correct store operation
@@ -148,7 +152,6 @@ void WebGPURenderTarget::setUpRenderPassAttachments(wgpu::RenderPassDescriptor& 
                     .loadOp =
                             WebGPURenderTarget::getLoadOperation(params, getTargetBufferFlagsAt(i)),
                     .storeOp = storeOp,
-//                    .clearValue = {0.0f, 1.0f, 0.0f, 0.0f}
                     .clearValue = {
                         .r = params.clearColor.r,
                         .g = params.clearColor.g,
@@ -219,10 +222,6 @@ void WebGPURenderTarget::setUpRenderPassAttachments(wgpu::RenderPassDescriptor& 
     outDescriptor.colorAttachments = mColorAttachmentDescriptors.data();
     outDescriptor.depthStencilAttachment =
             mHasDepthStencilAttachment ? &mDepthStencilAttachmentDescriptor : nullptr;
-
-    // descriptor.sampleCount was removed from the core spec. If your webgpu.h still has it,
-    // and your Dawn version expects it, you might need to set it here based on this->samples.
-    // e.g., descriptor.sampleCount = this->samples;
 }
 
 }// namespace filament::backend

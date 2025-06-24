@@ -353,16 +353,6 @@ WebGPUTexture::WebGPUTexture(const SamplerType samplerType, const uint8_t levels
             mArrayLayerCount, samplerType);
     FILAMENT_CHECK_POSTCONDITION(mDefaultTextureView)
             << "Failed to create default texture view for " << textureDescriptor.label;
-#if FWGPU_ENABLED(FWGPU_PRINT_SYSTEM)
-    if (mViewFormat != mWebGPUFormat) {
-        std::stringstream viewFormatStream;
-        viewFormatStream << mViewFormat;
-        std::stringstream textureFormatStream;
-        textureFormatStream << mWebGPUFormat;
-        FWGPU_LOGD << "Texture '" << textureDescriptor.label << "' has view format "
-                   << viewFormatStream.str() << " and texture format " << textureFormatStream.str();
-    }
-#endif
 }
 
 WebGPUTexture::WebGPUTexture(WebGPUTexture const* src, const uint8_t baseLevel,

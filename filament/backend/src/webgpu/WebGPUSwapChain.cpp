@@ -291,20 +291,23 @@ wgpu::TextureView WebGPUSwapChain::getCurrentSurfaceTextureView(
     wgpu::SurfaceTexture surfaceTexture;
     mSurface.GetCurrentTexture(&surfaceTexture);
     if (surfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal) {
+        mCurrentSurfaceTexture = nullptr; // Ensure it's cleared on failure
         return nullptr;
     }
-    // Create a view for this surface texture
-    // TODO: review these initiliazations as webgpu pipeline gets mature
+    // Store the acquired surface texture
+    mCurrentSurfaceTexture = surfaceTexture.texture; // STORE THE TEXTURE HERE
+
+    // Create a view for this surface texture (this part remains the same)
     wgpu::TextureViewDescriptor textureViewDescriptor = {
         .label = "surface_texture_view",
-        .format = surfaceTexture.texture.GetFormat(),
+        .format = mCurrentSurfaceTexture.GetFormat(), // Use the stored texture's format
         .dimension = wgpu::TextureViewDimension::e2D,
         .baseMipLevel = 0,
         .mipLevelCount = 1,
         .baseArrayLayer = 0,
         .arrayLayerCount = 1
     };
-    return surfaceTexture.texture.CreateView(&textureViewDescriptor);
+    return mCurrentSurfaceTexture.CreateView(&textureViewDescriptor);
 }
 
 void WebGPUSwapChain::present() {

@@ -65,7 +65,8 @@ public:
     [[nodiscard]] MRT const& getColorAttachmentInfos() const { return mColorAttachments; }
     [[nodiscard]] Attachment const& getDepthAttachmentInfo() const { return mDepthAttachment; }
     [[nodiscard]] Attachment const& getStencilAttachmentInfo() const { return mStencilAttachment; }
-
+    [[nodiscard]] uint32_t getWidth() const {return mWidth;}
+    [[nodiscard]] uint32_t getHeight() const {return mHeight;}
     // Static helpers for load/store operations
     [[nodiscard]] static wgpu::LoadOp getLoadOperation(RenderPassParams const& params,
             TargetBufferFlags buffer);
@@ -74,6 +75,8 @@ public:
     [[nodiscard]] TargetBufferFlags getTargetBufferFlags() const { return mTargetFlags; }
 
 private:
+    uint32_t mWidth = 0;
+    uint32_t mHeight = 0;
     bool mDefaultRenderTarget = false;
     uint8_t mSamples = 1;
     uint8_t mLayerCount = 1;
@@ -88,6 +91,7 @@ private:
     std::vector<wgpu::RenderPassColorAttachment> mColorAttachmentDescriptors;
     wgpu::RenderPassDepthStencilAttachment mDepthStencilAttachmentDescriptor{};
     bool mHasDepthStencilAttachment = false;
+
 };
 
 }// namespace filament::backend
