@@ -34,8 +34,7 @@ public:
 
     WebGPURenderTarget(uint32_t width, uint32_t height, uint8_t samples, uint8_t layerCount,
             MRT const& colorAttachments, Attachment const& depthAttachment,
-            Attachment const& stencilAttachment,
-            TargetBufferFlags targets);
+            Attachment const& stencilAttachment, TargetBufferFlags const& targetFlags);
 
     // Default constructor for the default render target
     WebGPURenderTarget();
@@ -47,21 +46,16 @@ public:
             // For default render target:
             wgpu::TextureView const& defaultColorTextureView,
             wgpu::TextureView const& defaultDepthStencilTextureView,
-            wgpu::TextureFormat const& defaultDepthStencilFormat,
             // For custom render targets:
             wgpu::TextureView const* customColorTextureViews, // Array of views
             wgpu::TextureView const* customResolveTextureViews, // NEW: Array of resolve views
             uint32_t customColorTextureViewCount,
-            wgpu::TextureView const& customDepthTextureView,
-            wgpu::TextureView const& customStencilTextureView,
-            wgpu::TextureFormat customDepthFormat,
-            wgpu::TextureFormat customStencilFormat);
+            wgpu::TextureView const& customDepthStencilTextureView);
 
     [[nodiscard]] bool isDefaultRenderTarget() const { return mDefaultRenderTarget; }
     [[nodiscard]] uint8_t getSamples() const { return mSamples; }
     [[nodiscard]] uint8_t getLayerCount() const { return mLayerCount; }
 
-    // Accessors for the driver to get stored attachment info
     [[nodiscard]] MRT const& getColorAttachmentInfos() const { return mColorAttachments; }
     [[nodiscard]] Attachment const& getDepthAttachmentInfo() const { return mDepthAttachment; }
     [[nodiscard]] Attachment const& getStencilAttachmentInfo() const { return mStencilAttachment; }
@@ -74,10 +68,14 @@ public:
             TargetBufferFlags buffer);
     [[nodiscard]] TargetBufferFlags getTargetBufferFlags() const { return mTargetFlags; }
 
+    [[nodiscard]] TargetBufferFlags getTargetFlags() const { return mTargetFlags; }
+    void setTargetFlags( TargetBufferFlags value) { mTargetFlags = value; }
+
 private:
     uint32_t mWidth = 0;
     uint32_t mHeight = 0;
     bool mDefaultRenderTarget = false;
+    TargetBufferFlags mTargetFlags = TargetBufferFlags::NONE;
     uint8_t mSamples = 1;
     uint8_t mLayerCount = 1;
 
@@ -86,12 +84,11 @@ private:
     //      mDepthStencilAttachment?
     Attachment mDepthAttachment{};
     Attachment mStencilAttachment{};
-    TargetBufferFlags mTargetFlags;
-    // Cached descriptors for the render pass
-    std::vector<wgpu::RenderPassColorAttachment> mColorAttachmentDescriptors;
-    wgpu::RenderPassDepthStencilAttachment mDepthStencilAttachmentDescriptor{};
-    bool mHasDepthStencilAttachment = false;
 
+    // Cached descriptors for the render pass
+    std::vector<wgpu::RenderPassColorAttachment> mColorAttachmentDesc;
+    wgpu::RenderPassDepthStencilAttachment mDepthStencilAttachmentDesc{};
+    bool mHasDepthStencilAttachment = false;
 };
 
 }// namespace filament::backend
