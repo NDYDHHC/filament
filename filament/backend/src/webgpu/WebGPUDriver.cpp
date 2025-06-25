@@ -131,108 +131,14 @@ void WebGPUDriver::flush(int) {
 }
 
 void WebGPUDriver::finish(int /* dummy */) {
-
-    printf("WebGPUDriver::finish(int /* dummy */) {\n");
     if (mCommandEncoder != nullptr) {
-        // ... (existing assert_invariant, mRenderPassEncoder == nullptr check) ...
-
-        WebGPURenderTarget* renderTarget = mCurrentRenderTarget;
-
-        // Perform the copy only if it was a custom render target and multisampled
-        if (renderTarget && !renderTarget->isDefaultRenderTarget()) {
-            const auto& colorInfos = renderTarget->getColorAttachmentInfos();
-            // Assuming the primary resolved output is from the first color attachment (index 0)
-            if (colorInfos[0].handle) {
-                auto colorTexture = handleCast<WebGPUTexture>(colorInfos[0].handle);
-
-                // Check if the original texture was multisampled and has a resolve texture
-                printf("GetSamplesCount is: %u\n", colorTexture->getSamplesCount() );
-                if (colorTexture && colorTexture->getSamplesCount() > 1) {
-                    // IMPORTANT: Get the WebGPU Texture object for the RESOLVED content
-                    wgpu::Texture resolvedSourceTexture = colorTexture->getResolveTexture();
-
-                    // IMPORTANT: Get the WebGPU Texture object for the SWAPCHAIN'S CURRENT TEXTURE
-                    wgpu::Texture swapChainDestinationTexture = mSwapChain->getTexture();
-
-                    // --- DIAGNOSTIC ADDITIONS START ---
-                    // Assert or log to ensure source and destination textures are valid
-                    if (!resolvedSourceTexture) {
-                        FWGPU_LOGW << "WebGPUDriver::finish: Resolved source texture is NULL!";
-                        // Consider early exit or error handling
-                    }
-                    if (!swapChainDestinationTexture) {
-                        FWGPU_LOGW << "WebGPUDriver::finish: Swapchain destination texture is NULL! "
-                                         "Is getCurrentSurfaceTextureView failing or not called?";
-                        // Consider early exit or error handling
-                    }
-
-                    if (resolvedSourceTexture && swapChainDestinationTexture) {
-                        // Further checks:
-                        // 1. Ensure formats are compatible (often they must be identical for direct copy)
-                        if (resolvedSourceTexture.GetFormat() != swapChainDestinationTexture.GetFormat()) {
-                            FWGPU_LOGW << "WebGPUDriver::finish: Texture formats mismatch for copy. "
-                                          << "Source: " << static_cast<uint32_t>(resolvedSourceTexture.GetFormat())
-                                          << ", Dest: " << static_cast<uint32_t>(swapChainDestinationTexture.GetFormat());
-                        }
-
-                        // 2. Ensure dimensions are compatible
-//                        wgpu::Extent3D sourceSize = resolvedSourceTexture.
-
-                        if (resolvedSourceTexture.GetWidth() != swapChainDestinationTexture.GetWidth() ||
-                            resolvedSourceTexture.GetHeight() != swapChainDestinationTexture.GetHeight() ||
-                            resolvedSourceTexture.GetDepthOrArrayLayers() != swapChainDestinationTexture.GetDepthOrArrayLayers()) {
-                            FWGPU_LOGW << "WebGPUDriver::finish: Texture dimensions mismatch for copy. "
-                                          << "Source: {" << resolvedSourceTexture.GetWidth() << ", " << resolvedSourceTexture.GetHeight() << ", " << resolvedSourceTexture.GetDepthOrArrayLayers() << "}, "
-                                          << "Dest: {" << swapChainDestinationTexture.GetWidth() << ", " << swapChainDestinationTexture.GetHeight() << ", " << swapChainDestinationTexture.GetDepthOrArrayLayers() << "}";
-                        }
-
-                        // Define source properties using your TexelCopyTextureInfo
-                        wgpu::TexelCopyTextureInfo sourceInfo = {
-                            .texture = resolvedSourceTexture,
-                            .mipLevel = 0,
-                            .origin = {0, 0, 0},
-                            .aspect = wgpu::TextureAspect::All // Or specific aspect like Color if appropriate
-                        };
-
-                        // Define destination properties using your TexelCopyTextureInfo
-                        wgpu::TexelCopyTextureInfo destinationInfo = {
-                            .texture = swapChainDestinationTexture,
-                            .mipLevel = 0,
-                            .origin = {0, 0, 0},
-                            .aspect = wgpu::TextureAspect::All // Or specific aspect like Color
-                        };
-
-                        // Define the copy size using your Extent3D
-                        wgpu::Extent3D copySize = {
-                            .width = renderTarget->getWidth(),
-                            .height = renderTarget->getHeight(),
-                            .depthOrArrayLayers = 1 // Copy a single layer
-                        };
-
-                        FWGPU_LOGW << "WebGPUDriver::finish: Attempting CopyTextureToTexture."
-                                      << " Source: " << renderTarget->getWidth() << "x" << renderTarget->getHeight()
-                                      << ", Dest: " << swapChainDestinationTexture.GetWidth() << "x" << swapChainDestinationTexture.GetHeight();
-
-                        // Record the copy command
-                        mCommandEncoder.CopyTextureToTexture(&sourceInfo, &destinationInfo, &copySize);
-                    }
-                    // --- DIAGNOSTIC ADDITIONS END ---
-                }
-            }
-        }
-
+        // submit the command buffer thus far...
+        assert_invariant(mRenderPassEncoder == nullptr);
         wgpu::CommandBufferDescriptor commandBufferDescriptor{
             .label = "command_buffer",
         };
         mCommandBuffer = mCommandEncoder.Finish(&commandBufferDescriptor);
-
-        // --- DIAGNOSTIC ADDITION ---
-        if (!mCommandBuffer) {
-            FWGPU_LOGW << "WebGPUDriver::finish: Failed to create command buffer!";
-        }
-        // --- END DIAGNOSTIC ADDITION ---
-
-        assert_invariant(mCommandBuffer); // This assert should catch null command buffers
+        assert_invariant(mCommandBuffer);
         mQueue.Submit(1, &mCommandBuffer);
         mCommandBuffer = nullptr;
         // create a new command buffer encoder to continue recording the next command for frame...
@@ -920,8 +826,7 @@ void WebGPUDriver::beginRenderPass(Handle<HwRenderTarget> renderTargetHandle,
     std::array<wgpu::TextureView, MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT> customResolveViews{};
     uint32_t customColorViewCount = 0;
     wgpu::TextureView customDepthView = nullptr;
-    wgpu::TextureFormat customDepthFormat = wgpu::TextureFormat::Undefined;
-    wgpu::TextureFormat customStencilFormat = wgpu::TextureFormat::Undefined;
+
     wgpu::TextureView customStencilView = nullptr;
     bool multiSamp = false;
 
@@ -1117,118 +1022,12 @@ void WebGPUDriver::makeCurrent(Handle<HwSwapChain> drawSch, Handle<HwSwapChain> 
 }
 
 void WebGPUDriver::commit(Handle<HwSwapChain> sch) {
-    FWGPU_LOGI << "WebGPUDriver::commit: Function entered.";
-
-    assert_invariant(mCommandEncoder); // Ensure command encoder exists from beginFrame
-
-    // Ensure no render pass is active when committing (should be ended by endRenderPass or similar)
-    if (mRenderPassEncoder != nullptr) {
-        FWGPU_LOGW << "WebGPUDriver::commit: RenderPassEncoder was still active. Ending it.";
-        mRenderPassEncoder.End();
-        mRenderPassEncoder = nullptr;
-    }
-
-    WebGPURenderTarget* renderTarget = mCurrentRenderTarget;
-
-    // Perform the copy only if it was a custom render target and multisampled
-    if (renderTarget && renderTarget->isDefaultRenderTarget()) {
-        const auto& colorInfos = renderTarget->getColorAttachmentInfos();
-        if (colorInfos[0].handle) {
-            auto colorTexture = handleCast<WebGPUTexture>(colorInfos[0].handle);
-
-            // --- DIAGNOSTIC ADDITIONS START ---
-            FWGPU_LOGI << "WebGPUDriver::commit: Checking color attachment 0 for copy.";
-            FWGPU_LOGI << "WebGPUDriver::commit: colorTexture handle index: " << colorInfos[0].handle; // Print handle index
-            FWGPU_LOGI << "WebGPUDriver::commit: colorTexture pointer: " << (void*)colorTexture; // Print pointer value
-
-            if (colorTexture) {
-                FWGPU_LOGI << "WebGPUDriver::commit: colorTexture->getSamplesCount(): " << static_cast<uint32_t>(colorTexture->getSamplesCount());
-            } else {
-                FWGPU_LOGE << "WebGPUDriver::commit: colorTexture is NULL before samples check. Copy will not be attempted.";
-            }
-            // --- DIAGNOSTIC ADDITIONS END ---
-
-            // Check if the original texture was multisampled and has a resolve texture
-            if (colorTexture && colorTexture->getSamplesCount() > 1) {
-                // IMPORTANT: Get the WebGPU Texture object for the RESOLVED content
-                wgpu::Texture resolvedSourceTexture = colorTexture->getResolveTexture();
-
-                // IMPORTANT: Get the WebGPU Texture object for the SWAPCHAIN'S CURRENT TEXTURE
-                wgpu::Texture swapChainDestinationTexture = mSwapChain->getTexture();
-
-                // --- DIAGNOSTIC ADDITIONS START ---
-                if (!resolvedSourceTexture) {
-                    FWGPU_LOGE << "WebGPUDriver::commit: Resolved source texture is NULL!";
-                }
-                if (!swapChainDestinationTexture) {
-                    FWGPU_LOGE << "WebGPUDriver::commit: Swapchain destination texture is NULL! "
-                                     "Is getCurrentSurfaceTextureView failing or not called before commit?";
-                }
-
-                if (resolvedSourceTexture && swapChainDestinationTexture) {
-                    // Further checks:
-                    if (resolvedSourceTexture.GetFormat() != swapChainDestinationTexture.GetFormat()) {
-                        FWGPU_LOGE << "WebGPUDriver::commit: Texture formats mismatch for copy. "
-                                      << "Source: " << static_cast<uint32_t>(resolvedSourceTexture.GetFormat())
-                                      << ", Dest: " << static_cast<uint32_t>(swapChainDestinationTexture.GetFormat());
-                    }
-
-                    if (resolvedSourceTexture.GetWidth() != swapChainDestinationTexture.GetWidth() ||
-                            resolvedSourceTexture.GetHeight() != swapChainDestinationTexture.GetHeight() ||
-                            resolvedSourceTexture.GetDepthOrArrayLayers() != swapChainDestinationTexture.GetDepthOrArrayLayers()) {
-                            FWGPU_LOGW << "WebGPUDriver::finish: Texture dimensions mismatch for copy. "
-                                          << "Source: {" << resolvedSourceTexture.GetWidth() << ", " << resolvedSourceTexture.GetHeight() << ", " << resolvedSourceTexture.GetDepthOrArrayLayers() << "}, "
-                                          << "Dest: {" << swapChainDestinationTexture.GetWidth() << ", " << swapChainDestinationTexture.GetHeight() << ", " << swapChainDestinationTexture.GetDepthOrArrayLayers() << "}";
-                        }
-
-                    wgpu::TexelCopyTextureInfo sourceInfo = {
-                        .texture = resolvedSourceTexture,
-                        .mipLevel = 0,
-                        .origin = {0, 0, 0},
-                        .aspect = wgpu::TextureAspect::All
-                    };
-
-                    wgpu::TexelCopyTextureInfo destinationInfo = {
-                        .texture = swapChainDestinationTexture,
-                        .mipLevel = 0,
-                        .origin = {0, 0, 0},
-                        .aspect = wgpu::TextureAspect::All
-                    };
-
-                    wgpu::Extent3D copySize = {
-                        .width = renderTarget->getWidth(),
-                        .height = renderTarget->getHeight(),
-                        .depthOrArrayLayers = 1
-                    };
-
-                    FWGPU_LOGI << "WebGPUDriver::commit: Attempting CopyTextureToTexture."
-                                  << " Source: " << renderTarget->getWidth() << "x" << renderTarget->getHeight()
-                                  << ", Dest: " << swapChainDestinationTexture.GetWidth() << "x" << swapChainDestinationTexture.GetHeight();
-
-                    mCommandEncoder.CopyTextureToTexture(&sourceInfo, &destinationInfo, &copySize);
-                }
-                // --- DIAGNOSTIC ADDITIONS END ---
-            } else {
-                FWGPU_LOGE << "WebGPUDriver::commit: Skipping CopyTextureToTexture because colorTexture is null or samples count <= 1.";
-            }
-        } else {
-            FWGPU_LOGE << "WebGPUDriver::commit: Skipping CopyTextureToTexture because color attachment 0 handle is null.";
-        }
-    }
-
-    // Now, finish the command encoder and submit the command buffer
     wgpu::CommandBufferDescriptor commandBufferDescriptor{
         .label = "command_buffer",
     };
     mCommandBuffer = mCommandEncoder.Finish(&commandBufferDescriptor);
-
-    // --- DIAGNOSTIC ADDITION ---
-    if (!mCommandBuffer) {
-        FWGPU_LOGE << "WebGPUDriver::commit: Failed to create command buffer!";
-    }
-    // --- END DIAGNOSTIC ADDITION ---
-
-    assert_invariant(mCommandBuffer); // This assert should catch null command buffers
+    assert_invariant(mCommandBuffer);
+    mCommandEncoder = nullptr;
     mQueue.Submit(1, &mCommandBuffer);
 
     static bool firstRender = true;
@@ -1247,15 +1046,9 @@ void WebGPUDriver::commit(Handle<HwSwapChain> sch) {
         firstRender = false;
     }
     mCommandBuffer = nullptr;
-    mTextureView = nullptr; // Ensure this is cleared for the next frame's swapchain texture view
-
+    mTextureView = nullptr;
     assert_invariant(mSwapChain);
-    mSwapChain->present(); // This presents the frame to the screen
-
-    // Recreate a new command encoder for the next frame
-//    wgpu::CommandEncoderDescriptor commandEncoderDescriptor = { .label = "command_encoder" };
-//    mCommandEncoder = mDevice.CreateCommandEncoder(&commandEncoderDescriptor);
-//    assert_invariant(mCommandEncoder); // Ensure the new encoder is valid
+    mSwapChain->present();
 }
 
 void WebGPUDriver::setPushConstant(backend::ShaderStage stage, uint8_t index,

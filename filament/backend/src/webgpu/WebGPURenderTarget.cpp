@@ -74,22 +74,18 @@ wgpu::StoreOp WebGPURenderTarget::getStoreOperation(RenderPassParams const& para
     }
     return wgpu::StoreOp::Store;
 }
+ void WebGPURenderTarget::setUpRenderPassAttachments(
+            wgpu::RenderPassDescriptor& outDescriptor,
+            RenderPassParams const& params,
+            // For default render target:
+            wgpu::TextureView const& defaultColorTextureView,
+            wgpu::TextureView const& defaultDepthStencilTextureView,
+            // For custom render targets:
+            wgpu::TextureView const* customColorTextureViews, // Array of views
+            wgpu::TextureView const* customResolveTextureViews, // NEW: Array of resolve views
+            uint32_t customColorTextureViewCount,
+            wgpu::TextureView const& customDepthStencilTextureView){
 
-void WebGPURenderTarget::setUpRenderPassAttachments(wgpu::RenderPassDescriptor& outDescriptor,
-        RenderPassParams const& params, wgpu::TextureView const& defaultColorTextureView,
-        wgpu::TextureView const& defaultDepthStencilTextureView,
-        wgpu::TextureFormat const& defaultDepthStencilFormat,
-        wgpu::TextureView const* customColorTextureViews,
-        wgpu::TextureView const* customResolveTextureViews, // NEW: Added resolve views parameter
-        uint32_t customColorTextureViewCount,
-        wgpu::TextureView const& customDepthTextureView,
-        wgpu::TextureView const& customStencilTextureView,
-        const wgpu::TextureFormat customDepthFormat,
-        const wgpu::TextureFormat customStencilFormat) {
-    mColorAttachmentDescriptors.clear();
-    mHasDepthStencilAttachment = false;
-        wgpu::TextureView const* customColorTextureViews, uint32_t customColorTextureViewCount,
-        wgpu::TextureView const& customDepthStencilTextureView){
     mColorAttachmentDesc.clear();
 
     const bool hasDepth = any(mTargetFlags & TargetBufferFlags::DEPTH);
