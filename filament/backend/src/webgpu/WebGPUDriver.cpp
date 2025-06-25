@@ -981,8 +981,106 @@ void WebGPUDriver::beginRenderPass(Handle<HwRenderTarget> renderTargetHandle,
 }
 
 void WebGPUDriver::endRenderPass(int /* dummy */) {
-    mRenderPassEncoder.End();
-    mRenderPassEncoder = nullptr;
+       FWGPU_LOGI << "WebGPUDriver::commit: Function entered.";
+//    FWGPU_LOGI << "WebGPUDriver::commit: mCommandEncoder pointer: " << (void*)mCommandEncoder;
+
+    assert_invariant(mCommandEncoder);
+
+    if (mRenderPassEncoder != nullptr) {
+        FWGPU_LOGW << "WebGPUDriver::commit: RenderPassEncoder was still active. Ending it.";
+        mRenderPassEncoder.End();
+        mRenderPassEncoder = nullptr;
+    }
+
+    WebGPURenderTarget* renderTarget = mCurrentRenderTarget;
+
+    // Perform the copy only if it was a custom render target and multisampled
+    if (renderTarget && !renderTarget->isDefaultRenderTarget()) {
+        const auto& colorInfos = renderTarget->getColorAttachmentInfos();
+        if (colorInfos[0].handle) {
+            auto colorTexture = handleCast<WebGPUTexture>(colorInfos[0].handle);
+
+            FWGPU_LOGI << "WebGPUDriver::commit: Checking color attachment 0 for copy.";
+//            FWGPU_LOGI << "WebGPUDriver::commit: colorTexture handle index: " << colorInfos[0].handle.index;
+            FWGPU_LOGI << "WebGPUDriver::commit: colorTexture pointer: " << (void*)colorTexture;
+
+            if (colorTexture) {
+                FWGPU_LOGI << "WebGPUDriver::commit: colorTexture->getSamplesCount(): " << static_cast<uint32_t>(colorTexture->getSamplesCount());
+            } else {
+                FWGPU_LOGE << "WebGPUDriver::commit: colorTexture is NULL before samples check. Copy will not be attempted.";
+            }
+
+            // Check if the original texture was multisampled and has a resolve texture
+            if (colorTexture && colorTexture->getSamplesCount() > 1) {
+                // IMPORTANT: Get the WebGPU Texture object for the RESOLVED content
+                wgpu::Texture resolvedSourceTexture = colorTexture->getResolveTexture();
+
+                // IMPORTANT: Get the WebGPU Texture object for the SWAPCHAIN'S CURRENT TEXTURE
+                wgpu::Texture swapChainDestinationTexture = mSwapChain->getTexture();
+
+                if (!resolvedSourceTexture) {
+                    FWGPU_LOGE << "WebGPUDriver::commit: Resolved source texture is NULL!";
+                }
+                if (!swapChainDestinationTexture) {
+                    FWGPU_LOGE << "WebGPUDriver::commit: Swapchain destination texture is NULL! "
+                                     "Is getCurrentSurfaceTextureView failing or not called before commit?";
+                }
+
+                if (resolvedSourceTexture && swapChainDestinationTexture) {
+                    if (resolvedSourceTexture.GetFormat() != swapChainDestinationTexture.GetFormat()) {
+                        FWGPU_LOGE << "WebGPUDriver::commit: Texture formats mismatch for copy. "
+                                      << "Source: " << static_cast<uint32_t>(resolvedSourceTexture.GetFormat())
+                                      << ", Dest: " << static_cast<uint32_t>(swapChainDestinationTexture.GetFormat());
+                    }
+
+//                    wgpu::Extent3D sourceSize = resolvedSourceTexture.GetSize();
+//                    wgpu::Extent3D destSize = swapChainDestinationTexture.GetSize();
+//
+//                    if (sourceSize.width != destSize.width ||
+//                        sourceSize.height != destSize.height ||
+//                        sourceSize.depthOrArrayLayers != destSize.depthOrArrayLayers) {
+//                        FWGPU_LOGE << "WebGPUDriver::commit: Texture dimensions mismatch for copy. "
+//                                      << "Source: {" << sourceSize.width << ", " << sourceSize.height << ", " << sourceSize.depthOrArrayLayers << "}, "
+//                                      << "Dest: {" << destSize.width << ", " << destSize.height << ", " << destSize.depthOrArrayLayers << "}";
+//                    }
+
+                    wgpu::TexelCopyTextureInfo sourceInfo = {
+                        .texture = resolvedSourceTexture,
+                        .mipLevel = 0,
+                        .origin = {0, 0, 0},
+                        .aspect = wgpu::TextureAspect::All
+                    };
+
+                    wgpu::TexelCopyTextureInfo destinationInfo = {
+                        .texture = swapChainDestinationTexture,
+                        .mipLevel = 0,
+                        .origin = {0, 0, 0},
+                        .aspect = wgpu::TextureAspect::All
+                    };
+
+                    wgpu::Extent3D copySize = {
+                        .width = renderTarget->getWidth(),
+                        .height = renderTarget->getHeight(),
+                        .depthOrArrayLayers = 1
+                    };
+
+//                    FWGPU_LOGI << "WebGPUDriver::commit: Attempting CopyTextureToTexture."
+//                                  << " Source: " << renderTarget->getWidth() << "x" << renderTarget->getHeight()
+//                                  << ", Dest: " << destSize.width << "x" << destSize.height;
+
+                    mCommandEncoder.CopyTextureToTexture(&sourceInfo, &destinationInfo, &copySize);
+                }
+            } else {
+//                FWGPU_LOGE << "WebGPUDriver::commit: Skipping CopyTextureToTexture because colorTexture is null or samples count <= 1.";
+            }
+        } else {
+//            FWGPU_LOGE << "WebGPUDriver::commit: Skipping CopyTextureToTexture because color attachment 0 handle is null.";
+        }
+    }
+
+
+//    mRenderPassEncoder.End();
+//    mRenderPassEncoder = nullptr;
 }
 
 void WebGPUDriver::nextSubpass(int) {
@@ -1022,6 +1120,7 @@ void WebGPUDriver::makeCurrent(Handle<HwSwapChain> drawSch, Handle<HwSwapChain> 
 }
 
 void WebGPUDriver::commit(Handle<HwSwapChain> sch) {
+
     wgpu::CommandBufferDescriptor commandBufferDescriptor{
         .label = "command_buffer",
     };
@@ -1031,8 +1130,6 @@ void WebGPUDriver::commit(Handle<HwSwapChain> sch) {
     mQueue.Submit(1, &mCommandBuffer);
 
     static bool firstRender = true;
-    // For the first frame rendered, we need to make sure the work is done before presenting or we
-    // get a purple flash
     if (firstRender) {
         auto f = mQueue.OnSubmittedWorkDone(wgpu::CallbackMode::WaitAnyOnly,
                 [=](wgpu::QueueWorkDoneStatus) {});
@@ -1047,8 +1144,13 @@ void WebGPUDriver::commit(Handle<HwSwapChain> sch) {
     }
     mCommandBuffer = nullptr;
     mTextureView = nullptr;
+
     assert_invariant(mSwapChain);
     mSwapChain->present();
+
+    wgpu::CommandEncoderDescriptor commandEncoderDescriptor = { .label = "command_encoder" };
+    mCommandEncoder = mDevice.CreateCommandEncoder(&commandEncoderDescriptor);
+    assert_invariant(mCommandEncoder);
 }
 
 void WebGPUDriver::setPushConstant(backend::ShaderStage stage, uint8_t index,

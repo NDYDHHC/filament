@@ -326,7 +326,7 @@ WebGPUTexture::WebGPUTexture(const SamplerType samplerType, const uint8_t levels
             .mipLevelCount = 1, // Resolve texture is always single-mip
             .sampleCount = 1,   // Resolve texture is always single-sampled
             .viewFormatCount = 0,
-            .viewFormats = nullptr,
+            .viewFormats = &mViewFormat,
         };
         mResolveTexture = device.CreateTexture(&resolveTextureDesc);
         FILAMENT_CHECK_POSTCONDITION(mResolveTexture) << "Failed to create resolve texture.";
