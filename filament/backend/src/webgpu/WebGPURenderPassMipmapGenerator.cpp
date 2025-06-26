@@ -16,6 +16,8 @@
 
 #include "WebGPURenderPassMipmapGenerator.h"
 
+#include "WebGPUConstants.h"
+
 #include <utils/Panic.h>
 
 #include <webgpu/webgpu_cpp.h>
@@ -32,15 +34,15 @@ namespace {
 // (this is checked with the getCompatibilityFor function)
 constexpr uint32_t TEXTURE_BIND_GROUP_INDEX{ 0 };
 constexpr size_t TEXTURE_BIND_GROUP_ENTRY_SIZE{ 2 }; // sampler and texture
-constexpr uint32_t SAMPLER_BINDING_INDEX{ 0 };
-constexpr uint32_t TEXTURE_BINDING_INDEX{ 1 };
+constexpr uint32_t TEXTURE_BINDING_INDEX{ 0 };
+constexpr uint32_t SAMPLER_BINDING_INDEX{ 1 };
 constexpr std::string_view VERTEX_SHADER_ENTRY_POINT{ "vertexShaderMain" };
 constexpr std::string_view FRAGMENT_SHADER_ENTRY_POINT{ "fragmentShaderMain" };
 // Note: would be nice to generate this constexpr string from the constexpr variables above
 // to avoid them getting out of sync while still having the compile/build time optimization
 constexpr std::string_view SHADER_SOURCE{ R"(
-    @group(0) @binding(0) var previousMipLevelSampler: sampler;
-    @group(0) @binding(1) var previousMipLevelTexture: texture_2d<f32>;
+    @group(0) @binding(0) var previousMipLevelTexture: texture_2d<f32>;
+    @group(0) @binding(1) var previousMipLevelSampler: sampler;
 
     struct VertexShaderOutput {
       @builtin(position) position: vec4<f32>,
@@ -105,14 +107,6 @@ constexpr std::string_view SHADER_SOURCE{ R"(
 [[nodiscard]] wgpu::BindGroupLayout createTextureBindGroupLayout(wgpu::Device const& device) {
     const wgpu::BindGroupLayoutEntry bindGroupLayoutEntries[TEXTURE_BIND_GROUP_ENTRY_SIZE] {
         {
-            .binding = SAMPLER_BINDING_INDEX,
-            .visibility = wgpu::ShaderStage::Fragment,
-            .sampler = {
-                .type = wgpu::SamplerBindingType::Filtering, // only hardware accelerated filtering
-                                                             // supported
-            },
-        },
-        {
             .binding = TEXTURE_BINDING_INDEX,
             .visibility = wgpu::ShaderStage::Fragment,
             .texture = {
@@ -120,6 +114,14 @@ constexpr std::string_view SHADER_SOURCE{ R"(
                                                               // type supported for now
                 .viewDimension = wgpu::TextureViewDimension::e2D, // only 2D supported for now
                 .multisampled = false, // MSAA textures not supported for now
+            },
+        },
+        {
+            .binding = SAMPLER_BINDING_INDEX,
+            .visibility = wgpu::ShaderStage::Fragment,
+            .sampler = {
+                .type = wgpu::SamplerBindingType::Filtering, // only hardware accelerated filtering
+                                                             // supported
             },
         },
     };
@@ -215,17 +217,17 @@ WebGPURenderPassMipmapGenerator::getCompatibilityFor(const wgpu::TextureFormat f
     switch (format) {
         case wgpu::TextureFormat::Depth16Unorm:
         case wgpu::TextureFormat::Depth24Plus:
-        case wgpu::TextureFormat::Depth24PlusStencil8:
         case wgpu::TextureFormat::Depth32Float:
+            // depth textures are supported, but need to be treated differently
+            break;
+        case wgpu::TextureFormat::Depth24PlusStencil8:
         case wgpu::TextureFormat::Depth32FloatStencil8:
             return {
                 .compatible = false,
-                .reason = "A depth texture format requires special sampler treatment and does "
-                          "not "
-                          "generally support linear filtering needed for render pass based "
-                          "mipmap "
-                          "generation, thus this texture is not supported, as it is a kind of "
-                          "depth texture.",
+                .reason = "A depth + stencil texture format requires special shader treatment. "
+                          "Although depth only formats are supported, we do not currently support "
+                          "depth+stencil formats until we have sufficient need to justify the "
+                          "added complexity.",
             };
         case wgpu::TextureFormat::Undefined:
         case wgpu::TextureFormat::External:
@@ -253,6 +255,7 @@ WebGPURenderPassMipmapGenerator::getCompatibilityFor(const wgpu::TextureFormat f
                                   "which is needed for render pass based mipmap generation.",
                     };
                 case ScalarSampleType::F32:
+                    // floats scalar types are supported
                     break;
             }
     }
@@ -280,6 +283,7 @@ WebGPURenderPassMipmapGenerator::getCompatibilityFor(const wgpu::TextureFormat f
                           "implementation (but could be extended to later if REALLY needed).",
             };
         case wgpu::TextureDimension::e2D:
+            // 2D textures are supported
             break;
     }
     // check that the texture is single-sampled (for now)...
@@ -411,9 +415,9 @@ WebGPURenderPassMipmapGenerator::getScalarSampleTypeFrom(const wgpu::TextureForm
         case wgpu::TextureFormat::Depth24PlusStencil8:
         case wgpu::TextureFormat::Depth32Float:
         case wgpu::TextureFormat::Depth32FloatStencil8:
-            PANIC_POSTCONDITION("A depth texture format requires special sampler treatment and "
-                                "does not generally support linear filtering (needed for mipmap "
-                                "generation). Thus no applicable scalar sample type for %d",
+            PANIC_POSTCONDITION("A depth texture format requires special shader treatment and "
+                                "does not generally support linear filtering. "
+                                "Thus no applicable scalar sample type for %d",
                     format);
             break;
         case wgpu::TextureFormat::Undefined:
@@ -426,8 +430,11 @@ WebGPURenderPassMipmapGenerator::getScalarSampleTypeFrom(const wgpu::TextureForm
 void WebGPURenderPassMipmapGenerator::generateMipmaps(wgpu::Queue const& queue,
         wgpu::Texture const& texture) {
     const uint32_t mipLevelCount{ texture.GetMipLevelCount() };
-    if (mipLevelCount < 2) {
+    if (mipLevelCount <= 1) {
         return; // nothing to do
+    }
+    if (texture.GetFormat() == wgpu::TextureFormat::Depth32Float) {
+        FWGPU_LOGD << "Generating mipmaps for a depth texture!";
     }
     wgpu::RenderPipeline const& pipeline{ getOrCreatePipelineFor(texture.GetFormat()) };
     const wgpu::CommandEncoderDescriptor commandEncoderDescriptor{
@@ -493,12 +500,12 @@ void WebGPURenderPassMipmapGenerator::generateMipmap(wgpu::CommandEncoder const&
     // create the render pass...
     const wgpu::BindGroupEntry textureBindGroupEntries[TEXTURE_BIND_GROUP_ENTRY_SIZE]{
         {
-            .binding = SAMPLER_BINDING_INDEX,
-            .sampler = mPreviousMipLevelSampler,
-        },
-        {
             .binding = TEXTURE_BINDING_INDEX,
             .textureView = sourceView,
+        },
+        {
+            .binding = SAMPLER_BINDING_INDEX,
+            .sampler = mPreviousMipLevelSampler,
         },
     };
     const wgpu::BindGroupDescriptor textureBindGroupDescriptor{

@@ -48,6 +48,10 @@ private:
         U32,
     };
 
+    /**
+     * @param format known non-depth, non-external format
+     * @return the scalar type for a sampler of the given texture format
+     */
     [[nodiscard]] constexpr static ScalarSampleType getScalarSampleTypeFrom(
             wgpu::TextureFormat format);
 
