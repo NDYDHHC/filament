@@ -39,7 +39,19 @@ public:
     [[nodiscard]] wgpu::TextureView getCurrentSurfaceTextureView(wgpu::Extent2D const&);
 
     [[nodiscard]] wgpu::TextureView getDepthTextureView() const { return mDepthTextureView; }
-
+       // This method should return the *color* texture of the current surface
+    [[nodiscard]] wgpu::Texture getCurrentSurfaceTexture() {
+        // You'll need to update this to return the actual color texture
+        // from the last call to GetCurrentTexture().
+        // For now, as a placeholder, if you absolutely need a wgpu::Texture
+        // from the swapchain (which is less common than a TextureView for rendering),
+        // you might need to store it after a call to GetCurrentTexture().
+        // For direct copy operations, the texture retrieved by getCurrentSurfaceTextureView
+        // before creating a view from it would be the correct one.
+        // Let's create a new member to store it temporarily if needed.
+        return mCurrentColorTexture; // This will be set in getCurrentSurfaceTextureView
+    }
+    wgpu::Surface getSurface() {return mSurface;}
     void present();
 
 private:
@@ -52,6 +64,8 @@ private:
     wgpu::TextureFormat mDepthFormat = wgpu::TextureFormat::Undefined;
     wgpu::Texture mDepthTexture = nullptr;
     wgpu::TextureView mDepthTextureView = nullptr;
+    wgpu::Texture mCurrentColorTexture = nullptr; // Add this member to store the current color texture
+
 };
 
 } // namespace filament::backend

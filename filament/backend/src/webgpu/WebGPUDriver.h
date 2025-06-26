@@ -87,6 +87,15 @@ private:
         backend::DescriptorSetOffsetArray offsets;
     };
     std::array<DescriptorSetBindingInfo,MAX_DESCRIPTOR_SET_COUNT> mCurrentDescriptorSets;
+
+     // Members for the blit pipeline
+    wgpu::RenderPipeline mBlitPipeline = nullptr;
+    wgpu::BindGroupLayout mBlitBindGroupLayout = nullptr;
+
+    // Helper function for the blit operation
+    wgpu::RenderPipeline getOrCreateBlitPipeline(wgpu::TextureFormat targetFormat);
+
+
     /*
      * Driver interface
      */

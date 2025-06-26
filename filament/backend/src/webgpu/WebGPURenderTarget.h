@@ -47,12 +47,15 @@ public:
             wgpu::TextureView const& defaultDepthStencilTextureView,
             // For custom render targets:
             wgpu::TextureView const* customColorTextureViews, // Array of views
+            wgpu::TextureView const* customResolveTextureViews,
             uint32_t customColorTextureViewCount,
             wgpu::TextureView const& customDepthStencilTextureView);
 
     [[nodiscard]] bool isDefaultRenderTarget() const { return mDefaultRenderTarget; }
     [[nodiscard]] uint8_t getSamples() const { return mSamples; }
     [[nodiscard]] uint8_t getLayerCount() const { return mLayerCount; }
+    [[nodiscard]] uint32_t getWidth() const {return mWidth;}
+    [[nodiscard]] uint32_t getHeight() const {return mHeight;}
 
     [[nodiscard]] MRT const& getColorAttachmentInfos() const { return mColorAttachments; }
     [[nodiscard]] Attachment const& getDepthAttachmentInfo() const { return mDepthAttachment; }
@@ -67,6 +70,8 @@ public:
     void setTargetFlags( TargetBufferFlags value) { mTargetFlags = value; }
 
 private:
+    uint32_t mWidth = 0;
+    uint32_t mHeight = 0;
     bool mDefaultRenderTarget = false;
     TargetBufferFlags mTargetFlags = TargetBufferFlags::NONE;
     uint8_t mSamples = 1;

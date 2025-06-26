@@ -34,6 +34,8 @@ WebGPURenderTarget::WebGPURenderTarget(const uint32_t width, const uint32_t heig
         const uint8_t samples, const uint8_t layerCount, MRT const& colorAttachmentsMRT,
         Attachment const& depthAttachmentInfo, Attachment const& stencilAttachmentInfo, TargetBufferFlags const& targetFlags)
     : HwRenderTarget{ width, height },
+      mWidth{width},
+      mHeight{height},
       mDefaultRenderTarget{ false },
       mTargetFlags{ targetFlags },
       mSamples{ samples },
@@ -74,9 +76,12 @@ wgpu::StoreOp WebGPURenderTarget::getStoreOperation(RenderPassParams const& para
 }
 
 void WebGPURenderTarget::setUpRenderPassAttachments(wgpu::RenderPassDescriptor& outDescriptor,
-        RenderPassParams const& params, wgpu::TextureView const& defaultColorTextureView,
+        RenderPassParams const& params,
+        wgpu::TextureView const& defaultColorTextureView,
         wgpu::TextureView const& defaultDepthStencilTextureView,
-        wgpu::TextureView const* customColorTextureViews, uint32_t customColorTextureViewCount,
+        wgpu::TextureView const* customColorTextureViews,
+        wgpu::TextureView const* customResolveTextureViews,
+        uint32_t customColorTextureViewCount,
         wgpu::TextureView const& customDepthStencilTextureView){
     mColorAttachmentDesc.clear();
 
@@ -91,20 +96,26 @@ void WebGPURenderTarget::setUpRenderPassAttachments(wgpu::RenderPassDescriptor& 
         assert_invariant(defaultColorTextureView);
         mColorAttachmentDesc.push_back({
             .view = defaultColorTextureView,
-            .resolveTarget = nullptr,
+            .resolveTarget = (mSamples > 1 && customResolveTextureViews && customColorTextureViewCount > 0) ? customResolveTextureViews[0] : nullptr, // Adjust index if needed
             .loadOp = WebGPURenderTarget::getLoadOperation(params, TargetBufferFlags::COLOR0),
             .storeOp = WebGPURenderTarget::getStoreOperation(params, TargetBufferFlags::COLOR0),
-            .clearValue = { params.clearColor.r, params.clearColor.g, params.clearColor.b,
-                params.clearColor.a } });
+            .clearValue = { params.clearColor.r, params.clearColor.g, params.clearColor.b, params.clearColor.a },
+        });
     } else {
         for (uint32_t i = 0; i < customColorTextureViewCount; ++i) {
             if (customColorTextureViews[i]) {
-                mColorAttachmentDesc.push_back({ .view = customColorTextureViews[i],
-                    // .resolveTarget = nullptr; // TODO: MSAA resolve for custom RT
+                wgpu::StoreOp storeOp = WebGPURenderTarget::getStoreOperation(params, getTargetBufferFlagsAt(i));
+                if (customResolveTextureViews[i] != nullptr) {
+                    // If we have a resolve target, we don't need the contents of the multisampled
+                    // attachment anymore. Discarding it is an optimization and can fix issues.
+                    storeOp = wgpu::StoreOp::Discard;
+                }
+                mColorAttachmentDesc.push_back({
+                    .view = customColorTextureViews[i],
+                    .resolveTarget = customResolveTextureViews[i],
                     .loadOp =
                             WebGPURenderTarget::getLoadOperation(params, getTargetBufferFlagsAt(i)),
-                    .storeOp = WebGPURenderTarget::getStoreOperation(params,
-                            getTargetBufferFlagsAt(i)),
+                    .storeOp = storeOp,
                     .clearValue = { .r = params.clearColor.r,
                         .g = params.clearColor.g,
                         .b = params.clearColor.b,

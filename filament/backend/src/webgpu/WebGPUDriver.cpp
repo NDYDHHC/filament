@@ -75,6 +75,27 @@ WebGPUDriver::WebGPUDriver(WebGPUPlatform& platform,
       mHandleAllocator{ "Handles", driverConfig.handleArenaSize,
           driverConfig.disableHandleUseAfterFreeCheck, driverConfig.disableHeapHandleTags } {
     mDevice.GetLimits(&mDeviceLimits);
+
+mDevice.SetLoggingCallback([](wgpu::LoggingType type, const char* message) {
+        // You might want to filter 'type' here if you only care about errors,
+        // but for debugging shader compilation, print everything.
+        switch (type) {
+            case wgpu::LoggingType::Error:
+                FILAMENT_CHECK_POSTCONDITION(false) << "WebGPU Device Error: " << message;
+                break;
+            case wgpu::LoggingType::Warning:
+                FWGPU_LOGW << "WebGPU Device Warning: " << message;
+                break;
+            case wgpu::LoggingType::Info:
+                FWGPU_LOGI << "WebGPU Device Info: " << message;
+                break;
+            // Add other cases if 'LoggingType' has more specific validation types.
+            default:
+                FWGPU_LOGI << "WebGPU Device Log (" << static_cast<int>(type) << "): " << message;
+                break;
+        }
+    });
+
 }
 
 WebGPUDriver::~WebGPUDriver() noexcept = default;
@@ -822,6 +843,8 @@ void WebGPUDriver::beginRenderPass(Handle<HwRenderTarget> renderTargetHandle,
     wgpu::TextureFormat defaultDepthStencilFormat = wgpu::TextureFormat::Undefined;
 
     std::array<wgpu::TextureView, MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT> customColorViews{};
+    // NEW: Array to hold resolve views for custom render targets.
+    std::array<wgpu::TextureView, MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT> customResolveViews{};
     uint32_t customColorViewCount = 0;
 
     wgpu::TextureView customDepthStencilView = nullptr;
@@ -865,8 +888,16 @@ void WebGPUDriver::beginRenderPass(Handle<HwRenderTarget> renderTargetHandle,
                             << ".";
                     const uint8_t mipLevel = colorInfos[i].level;
                     const uint32_t arrayLayer = colorInfos[i].layer;
-                    customColorViews[customColorViewCount++] =
+                    customColorViews[customColorViewCount] =
                             colorTexture->getOrMakeTextureView(mipLevel, arrayLayer);
+
+                    if (colorTexture->getSamplesCount() > 1) {
+                        customResolveViews[customColorViewCount] =
+                            colorTexture->getOrMakeResolveTextureView(mipLevel, arrayLayer);
+                    } else {
+                        customResolveViews[customColorViewCount] = nullptr;
+                    }
+                    customColorViewCount++;
                 }
             }
         }
@@ -936,6 +967,7 @@ void WebGPUDriver::beginRenderPass(Handle<HwRenderTarget> renderTargetHandle,
             defaultColorView,
             defaultDepthStencilView,
             customColorViews.data(),
+            customResolveViews.data(),
             customColorViewCount,
             customDepthStencilView);
 
@@ -954,9 +986,266 @@ void WebGPUDriver::beginRenderPass(Handle<HwRenderTarget> renderTargetHandle,
             params.depthRange.far);
 }
 
+wgpu::RenderPipeline WebGPUDriver::getOrCreateBlitPipeline(wgpu::TextureFormat targetFormat) {
+    // If the pipeline is already created, return it.
+    // Note: If you need different blit pipelines for different target formats,
+    // you might store them in a map or add targetFormat as part of the key.
+    // For simplicity, we assume one blit pipeline instance for the primary swapchain format.
+    if (mBlitPipeline) {
+        return mBlitPipeline;
+    }
+
+    // --- Shaders for the Blit Pipeline ---
+    // Vertex Shader: Generates a fullscreen quad using the vertex index.
+    // This avoids needing explicit vertex buffers for a simple fullscreen draw.
+    constexpr std::string_view VERTEX_SHADER_ENTRY_POINT{ "vertexShaderMain" };
+    constexpr std::string_view blitVertexShaderWgsl{ R"(
+        struct VertexShaderOutput {
+          @builtin(position) position: vec4<f32>,
+          @location(0) textureCoordinate: vec2<f32>,
+        };
+        @vertex
+        fn vertexShaderMain(@builtin(vertex_index) vertexIndex: u32) -> VertexShaderOutput {
+            let fullScreenTriangleVertices = array<vec2<f32>, 3>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>(3.0, -1.0),
+                vec2<f32>(-1.0, 3.0)
+            );
+            var out: VertexShaderOutput;
+            let vertex = fullScreenTriangleVertices[vertexIndex];
+            out.position = vec4<f32>(vertex * 2.0 - 1.0, 0.0, 1.0);
+            out.textureCoordinate = vec2<f32>(vertex.x, 1.0 - vertex.y);
+            return out;
+        }
+    )"};
+
+    // Fragment Shader: Samples the input texture and outputs the color.
+    // The WebGPU backend will handle the format conversion from RGBA16Float
+    // to the targetFormat (e.g., BGRA8Unorm) automatically for common cases,
+    // assuming values are within [0,1].
+    const char* blitFragmentShaderWgsl = R"(
+        @group(0) @binding(0) var sourceTexture: texture_2d<f32>;
+        @group(0) @binding(1) var sourceSampler: sampler;
+
+        @fragment
+        fn fmMain(@builtin(position) fragCoord: vec4<f32>) -> @location(0) vec4<f32> {
+            // Calculate UVs from fragment coordinates.
+            // Note: textureDimensions(sourceTexture) gives the dimensions of the texture.
+            // This assumes the blit covers the whole texture.
+            let uv = fragCoord.xy / vec2<f32>(textureDimensions(sourceTexture));
+            let color = textureSample(sourceTexture, sourceSampler, uv);
+
+            // If the source (RGBA16Float) has values outside [0,1] that you want to clamp,
+            // or if specific swizzling (e.g., RGBA to BGRA) is needed and not handled
+            // implicitly by the hardware, perform it here.
+            // Example for explicit BGRA output if necessary:
+            // return vec4<f32>(color.b, color.g, color.r, color.a);
+            return color;
+        }
+    )";
+
+    // --- Create Shader Modules ---
+    wgpu::ShaderModuleWGSLDescriptor wgslDescriptor{};
+    wgslDescriptor.code = blitFragmentShaderWgsl;
+
+        // --- Create Shader Modules ---
+    wgpu::ShaderModuleWGSLDescriptor wgslDescriptorVertex{};
+    wgslDescriptor.code = blitVertexShaderWgsl.data();
+
+    // --- Create Shader Modules ---
+    wgpu::ShaderModuleDescriptor vertexShaderDesc = {};
+    vertexShaderDesc.label = "Blit Vertex Shader";
+    vertexShaderDesc.nextInChain = &wgslDescriptorVertex;
+
+    wgpu::ShaderModule vertModule = mDevice.CreateShaderModule(&vertexShaderDesc);
+    FILAMENT_CHECK_POSTCONDITION(vertModule) << "Failed to create blit vertex shader module.";
+
+    wgpu::ShaderModuleDescriptor fragmentShaderDesc = {};
+    fragmentShaderDesc.label = "Blit Fragment Shader";
+    fragmentShaderDesc.nextInChain = &wgslDescriptor;
+
+    wgpu::ShaderModule fragModule = mDevice.CreateShaderModule(&fragmentShaderDesc);
+    FILAMENT_CHECK_POSTCONDITION(fragModule) << "Failed to create blit fragment shader module.";
+
+    // --- Create Bind Group Layout (for texture and sampler) ---
+    std::array<wgpu::BindGroupLayoutEntry, 2> bindGroupLayoutEntries = {
+        wgpu::BindGroupLayoutEntry{ // Binding 0: Texture
+            .binding = 0,
+            .visibility = wgpu::ShaderStage::Fragment,
+            .texture = wgpu::TextureBindingLayout{
+                .sampleType = wgpu::TextureSampleType::Float,
+                .viewDimension = wgpu::TextureViewDimension::e2D,
+                .multisampled = false, // Source texture is resolved, so not multisampled
+            },
+        },
+        wgpu::BindGroupLayoutEntry{ // Binding 1: Sampler
+            .binding = 1,
+            .visibility = wgpu::ShaderStage::Fragment,
+            .sampler = wgpu::SamplerBindingLayout{
+                .type = wgpu::SamplerBindingType::Filtering,
+            },
+        },
+    };
+
+    wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc = {
+        .label = "Blit Bind Group Layout",
+        .entryCount = bindGroupLayoutEntries.size(),
+        .entries = bindGroupLayoutEntries.data(),
+    };
+    mBlitBindGroupLayout = mDevice.CreateBindGroupLayout(&bindGroupLayoutDesc);
+    FILAMENT_CHECK_POSTCONDITION(mBlitBindGroupLayout) << "Failed to create blit bind group layout.";
+
+    // --- Create Pipeline Layout ---
+    wgpu::PipelineLayoutDescriptor pipelineLayoutDesc = {};
+    pipelineLayoutDesc.label = "Blit Pipeline Layout";
+    pipelineLayoutDesc.bindGroupLayoutCount = 1;
+    pipelineLayoutDesc.bindGroupLayouts = &mBlitBindGroupLayout; // Use the layout we just created
+    wgpu::PipelineLayout pipelineLayout = mDevice.CreatePipelineLayout(&pipelineLayoutDesc);
+    FILAMENT_CHECK_POSTCONDITION(pipelineLayout) << "Failed to create blit pipeline layout.";
+
+    // --- Define Render Pipeline Descriptor ---
+    wgpu::RenderPipelineDescriptor pipelineDesc = {};
+    pipelineDesc.label = "Blit Render Pipeline";
+    pipelineDesc.layout = pipelineLayout;
+
+    // Vertex state (simple for fullscreen quad generated by vertex index)
+    pipelineDesc.vertex.module = vertModule;
+    pipelineDesc.vertex.entryPoint = VERTEX_SHADER_ENTRY_POINT;
+
+    // Primitive state (draws a triangle strip that covers the screen)
+    pipelineDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+    pipelineDesc.primitive.stripIndexFormat = wgpu::IndexFormat::Undefined;
+    pipelineDesc.primitive.frontFace = wgpu::FrontFace::Undefined;
+    pipelineDesc.primitive.cullMode = wgpu::CullMode::None; // No culling
+
+    // Fragment state (color target is the swap chain's format)
+    wgpu::ColorTargetState colorTarget = {};
+    colorTarget.format = targetFormat;
+    colorTarget.blend = nullptr; // No blending needed for simple blit
+    colorTarget.writeMask = wgpu::ColorWriteMask::All;
+
+    wgpu::FragmentState fragmentState = {};
+    fragmentState.module = fragModule;
+    fragmentState.entryPoint = "fsMain";
+    fragmentState.targetCount = 1;
+    fragmentState.targets = &colorTarget;
+
+    pipelineDesc.fragment = &fragmentState;
+
+    // No depth/stencil state for a simple 2D blit
+    pipelineDesc.depthStencil = nullptr;
+
+    // No multisample state as the target is single-sampled (the swap chain)
+    pipelineDesc.multisample.count = 1;
+    pipelineDesc.multisample.mask = 0xFFFFFFFF;
+    pipelineDesc.multisample.alphaToCoverageEnabled = false;
+
+    // Create the pipeline
+    mBlitPipeline = mDevice.CreateRenderPipeline(&pipelineDesc);
+    FILAMENT_CHECK_POSTCONDITION(mBlitPipeline) << "Failed to create blit render pipeline.";
+
+    return mBlitPipeline;
+}
+
 void WebGPUDriver::endRenderPass(int /* dummy */) {
+
     mRenderPassEncoder.End();
     mRenderPassEncoder = nullptr;
+
+    // 1. Get the current swap chain texture view for presentation.
+
+    wgpu::Extent2D surfaceSize = mPlatform.getSurfaceExtent(mNativeWindow);
+    wgpu::TextureView destinationTextureView = mSwapChain->getCurrentSurfaceTextureView(surfaceSize);
+
+    // 2. Identify the source texture for the copy (the resolved MSAA output).
+    wgpu::Texture sourceTexture = nullptr;
+    WebGPUTexture* mainColorWebGPUTexture = nullptr;
+
+    if (mCurrentRenderTarget->isDefaultRenderTarget()) {
+        if (mDefaultRenderTarget->getSamples() > 1 && mDefaultRenderTarget->getColorAttachmentInfos()[0].handle) {
+            mainColorWebGPUTexture = handleCast<WebGPUTexture>(mDefaultRenderTarget->getColorAttachmentInfos()[0].handle);
+            if (mainColorWebGPUTexture && mainColorWebGPUTexture->getResolveTexture()) {
+                sourceTexture = mainColorWebGPUTexture->getResolveTexture();
+            }
+        }
+    } else { // It's a custom render target
+        if (mCurrentRenderTarget->getColorAttachmentInfos()[0].handle) {
+            mainColorWebGPUTexture = handleCast<WebGPUTexture>(mCurrentRenderTarget->getColorAttachmentInfos()[0].handle);
+            if (mainColorWebGPUTexture && mainColorWebGPUTexture->getSamplesCount() > 1 && mainColorWebGPUTexture->getResolveTexture()) {
+                sourceTexture = mainColorWebGPUTexture->getResolveTexture();
+            }
+        }
+    }
+
+    // 3. Perform the blit via a render pass if a source resolved texture is found and the command encoder is active.
+    if (sourceTexture && mCommandEncoder) {
+        // 3.1. Create the color attachment for the blit render pass.
+        wgpu::RenderPassColorAttachment blitColorAttachment = {
+            .view = destinationTextureView, // Use the view of the swap chain's color texture
+            .resolveTarget = nullptr,
+            .loadOp = wgpu::LoadOp::Load, // Or Clear if you want to clear the swapchain before blitting
+            .storeOp = wgpu::StoreOp::Store,
+            .clearValue = {0.0f, 0.0f, 0.0f, 1.0f},
+        };
+
+        wgpu::RenderPassDescriptor blitRenderPassDescriptor = {
+            .label = "blit_render_pass",
+            .colorAttachmentCount = 1,
+            .colorAttachments = &blitColorAttachment,
+            .depthStencilAttachment = nullptr, // No depth/stencil needed for a simple blit
+        };
+
+        wgpu::RenderPassEncoder blitPassEncoder = mCommandEncoder.BeginRenderPass(&blitRenderPassDescriptor);
+
+        wgpu::RenderPipeline blitPipeline = getOrCreateBlitPipeline(mSwapChain->getColorFormat()); // You need to implement this
+        blitPassEncoder.SetPipeline(blitPipeline);
+
+        wgpu::SamplerDescriptor samplerDesc = {
+            .addressModeU = wgpu::AddressMode::ClampToEdge,
+            .addressModeV = wgpu::AddressMode::ClampToEdge,
+            .magFilter = wgpu::FilterMode::Linear,
+            .minFilter = wgpu::FilterMode::Linear,
+        };
+        wgpu::Sampler linearSampler = mDevice.CreateSampler(&samplerDesc); // Assuming mDevice is available
+
+        // Create a texture view for the source texture if needed
+        wgpu::TextureView sourceTextureView = sourceTexture.CreateView({});
+
+        std::array<wgpu::BindGroupEntry, 2> bindGroupEntries = {
+            wgpu::BindGroupEntry{
+                .binding = 0, // Corresponds to @group(0) @binding(0) in WGSL
+                .textureView = sourceTextureView,
+            },
+            wgpu::BindGroupEntry{
+                .binding = 1, // Corresponds to @group(0) @binding(1) in WGSL
+                .sampler = linearSampler,
+            },
+        };
+        wgpu::BindGroupDescriptor bindGroupDescriptor = {
+            .label = "blit_bind_group",
+            .layout = blitPipeline.GetBindGroupLayout(0), // Get layout from your blit pipeline
+            .entryCount = bindGroupEntries.size(),
+            .entries = bindGroupEntries.data(),
+        };
+        wgpu::BindGroup blitBindGroup = mDevice.CreateBindGroup(&bindGroupDescriptor);
+
+        blitPassEncoder.SetBindGroup(0, blitBindGroup);
+
+        // TODO: Filament-specific: Set vertex and index buffers for a fullscreen quad.
+        // You'll need to manage these buffers.
+        // blitPassEncoder.SetVertexBuffer(0, myFullScreenQuadVertexBuffer);
+        // blitPassEncoder.SetIndexBuffer(myFullScreenQuadIndexBuffer, wgpu::IndexFormat::Uint16);
+        // blitPassEncoder.DrawIndexed(6, 1, 0, 0, 0); // For a 6-vertex quad (2 triangles)
+
+        // For simplicity, if your blit pipeline implicitly draws a fullscreen quad without
+        // explicit vertex buffers (e.g., if you generate vertex positions in the vertex shader),
+        // you might just call Draw(3) or Draw(6) without setting vertex buffers.
+        // A common pattern is to draw 3 vertices and compute quad coordinates in the shader.
+        blitPassEncoder.Draw(3); // Draw a single triangle that covers the screen
+
+        blitPassEncoder.End();
+    }
+
 }
 
 void WebGPUDriver::nextSubpass(int) {
@@ -996,6 +1285,81 @@ void WebGPUDriver::makeCurrent(Handle<HwSwapChain> drawSch, Handle<HwSwapChain> 
 }
 
 void WebGPUDriver::commit(Handle<HwSwapChain> sch) {
+//    // 1. Get the current texture from the swap chain for presentation.
+//    wgpu::SurfaceTexture currentSurfaceTexture;
+//    mSwapChain->getSurface().GetCurrentTexture(&currentSurfaceTexture);
+//    if (currentSurfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal) {
+//        // Handle error, e.g., swap chain lost or outdated.
+////        FILAMENT_LOGW << "Failed to get current swap chain texture: " << static_cast<uint32_t>(currentSurfaceTexture.status);
+//        if (currentSurfaceTexture.texture) {
+//            currentSurfaceTexture.texture.Destroy(); // Ensure texture is released on error path.
+//        }
+//        return;
+//    }
+//    wgpu::Texture destinationTexture = currentSurfaceTexture.texture;
+//
+//    // 2. Identify the source texture for the copy (the resolved MSAA output).
+//    // This assumes your main render target (mCurrentRenderTarget, or mDefaultRenderTarget if applicable)
+//    // has a WebGPUTexture color attachment that holds the resolved image.
+//    wgpu::Texture sourceTexture = nullptr;
+//    WebGPUTexture* mainColorWebGPUTexture = nullptr;
+//
+//    // Check if the current render target is the default one or a custom one.
+//    if (mCurrentRenderTarget->isDefaultRenderTarget()) {
+//        // If the default render target is multisampled, its primary color attachment
+//        // should provide the source texture (after resolve).
+//        if (mDefaultRenderTarget->getSamples() > 1 && mDefaultRenderTarget->getColorAttachmentInfos()[0].handle) {
+//            mainColorWebGPUTexture = handleCast<WebGPUTexture>(mDefaultRenderTarget->getColorAttachmentInfos()[0].handle);
+//            if (mainColorWebGPUTexture && mainColorWebGPUTexture->getResolveTexture()) {
+//                sourceTexture = mainColorWebGPUTexture->getResolveTexture();
+//            }
+//        }
+//        // If default RT is not MSAA or doesn't have a resolved texture,
+//        // rendering presumably goes directly to the swap chain, so no explicit copy needed here.
+//    } else { // It's a custom render target
+//        if (mCurrentRenderTarget->getColorAttachmentInfos()[0].handle) {
+//            mainColorWebGPUTexture = handleCast<WebGPUTexture>(mCurrentRenderTarget->getColorAttachmentInfos()[0].handle);
+//            if (mainColorWebGPUTexture && mainColorWebGPUTexture->getSamplesCount() > 1 && mainColorWebGPUTexture->getResolveTexture()) {
+//                sourceTexture = mainColorWebGPUTexture->getResolveTexture();
+//            }
+//        }
+//    }
+//
+//    // 3. Perform the copy if a source resolved texture is found and the command encoder is active.
+//    // The mCommandEncoder must still be active and not yet finished at this point.
+//    if (sourceTexture && mCommandEncoder) {
+//        uint32_t width = mCurrentRenderTarget->getWidth();
+//        uint32_t height = mCurrentRenderTarget->getHeight();
+//
+//        // 1. Create the source wgpu::ImageCopyTexture struct
+//        wgpu::TexelCopyTextureInfo sourceCopyInfo = {
+//            .texture = sourceTexture,
+//            .mipLevel = 0,
+//            .origin = {0, 0, 0}, // wgpu::Origin3D{x, y, z} for the copy origin
+//            .aspect = wgpu::TextureAspect::All,
+//        };
+//
+//        // 2. Create the destination wgpu::ImageCopyTexture struct
+//        wgpu::TexelCopyTextureInfo destinationCopyInfo = {
+//            .texture = destinationTexture,
+//            .mipLevel = 0,
+//            .origin = {0, 0, 0},
+//            .aspect = wgpu::TextureAspect::All,
+//        };
+//
+//        // 3. Create the wgpu::Extent3D struct for the copy size
+//        wgpu::Extent3D copySize = {
+//            .width = width,
+//            .height = height,
+//            .depthOrArrayLayers = 1, // For 2D texture, depth is 1
+//        };
+//
+//        // 4. Call CopyTextureToTexture with pointers to these structs
+//        mCommandEncoder.CopyTextureToTexture(&sourceCopyInfo, &destinationCopyInfo, &copySize);
+//
+////        FILAMENT_LOGI << "Performed CopyTextureToTexture from resolved texture to swap chain.";
+//    }
+
     wgpu::CommandBufferDescriptor commandBufferDescriptor{
         .label = "command_buffer",
     };

@@ -105,7 +105,9 @@ void printSurfaceConfiguration(wgpu::SurfaceConfiguration const& config,
         bool needStencil) {
     if (needStencil) {
         if (depth32FloatStencil8Enabled) {
+
             return wgpu::TextureFormat::Depth32FloatStencil8;
+//            return wgpu::TextureFormat::RGBA8Unorm;
         } else {
             return wgpu::TextureFormat::Depth24PlusStencil8;
         }
@@ -187,7 +189,7 @@ void initConfig(wgpu::SurfaceConfiguration& config, wgpu::Device const& device,
         wgpu::SurfaceCapabilities const& capabilities, wgpu::Extent2D const& surfaceSize,
         bool useSRGBColorSpace) {
     config.device = device;
-    config.usage = wgpu::TextureUsage::RenderAttachment;
+    config.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst;
     config.width = surfaceSize.width;
     config.height = surfaceSize.height;
     config.format =
@@ -200,7 +202,7 @@ void initConfig(wgpu::SurfaceConfiguration& config, wgpu::Device const& device,
 [[nodiscard]] wgpu::Texture createDepthTexture(wgpu::Device const& device,
         wgpu::Extent2D const& extent, wgpu::TextureFormat depthFormat) {
     wgpu::TextureDescriptor descriptor{ .label = "depth_texture",
-        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment,
+        .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst,
         .dimension = wgpu::TextureDimension::e2D,
         .size = { .width = extent.width, .height = extent.height, .depthOrArrayLayers = 1 },
         .format = depthFormat,
@@ -225,7 +227,7 @@ void initConfig(wgpu::SurfaceConfiguration& config, wgpu::Device const& device,
         .baseArrayLayer = 0,
         .arrayLayerCount = 1,
         .aspect = wgpu::TextureAspect::DepthOnly,
-        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment
+        .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst,
     };
     if (needStencil) {
         descriptor.aspect = wgpu::TextureAspect::All;
@@ -299,10 +301,12 @@ wgpu::TextureView WebGPUSwapChain::getCurrentSurfaceTextureView(
     wgpu::SurfaceTexture surfaceTexture;
     mSurface.GetCurrentTexture(&surfaceTexture);
     if (surfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal) {
+        mCurrentColorTexture = nullptr; // Clear if not successful
         return nullptr;
     }
+    mCurrentColorTexture = surfaceTexture.texture; // Store the texture here!
+
     // Create a view for this surface texture
-    // TODO: review these initiliazations as webgpu pipeline gets mature
     wgpu::TextureViewDescriptor textureViewDescriptor = {
         .label = "surface_texture_view",
         .format = surfaceTexture.texture.GetFormat(),
@@ -310,7 +314,8 @@ wgpu::TextureView WebGPUSwapChain::getCurrentSurfaceTextureView(
         .baseMipLevel = 0,
         .mipLevelCount = 1,
         .baseArrayLayer = 0,
-        .arrayLayerCount = 1
+        .arrayLayerCount = 1,
+        .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst
     };
     return surfaceTexture.texture.CreateView(&textureViewDescriptor);
 }
