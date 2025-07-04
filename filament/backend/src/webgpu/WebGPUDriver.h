@@ -56,6 +56,12 @@ public:
     [[nodiscard]] Dispatcher getDispatcher() const noexcept final;
     [[nodiscard]] static Driver* create(WebGPUPlatform& platform, const Platform::DriverConfig& driverConfig) noexcept;
 
+    wgpu::Texture mSceneColorTexture = nullptr;
+    wgpu::TextureView mSceneColorTextureView = nullptr;
+
+    uint32_t mSceneWidth = 0;
+    uint32_t mSceneHeight = 0;
+
 private:
     WebGPUDriver(WebGPUPlatform& platform, const Platform::DriverConfig& driverConfig) noexcept;
     [[nodiscard]] ShaderModel getShaderModel() const noexcept final;

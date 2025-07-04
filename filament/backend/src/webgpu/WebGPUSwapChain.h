@@ -37,6 +37,7 @@ public:
     [[nodiscard]] wgpu::TextureFormat getDepthFormat() const { return mDepthFormat; }
 
     [[nodiscard]] wgpu::TextureView getCurrentSurfaceTextureView(wgpu::Extent2D const&);
+    [[nodiscard]] wgpu::Texture getCurrentSurfaceTexture(wgpu::Extent2D const&);
 
     [[nodiscard]] wgpu::TextureView getDepthTextureView() const { return mDepthTextureView; }
 

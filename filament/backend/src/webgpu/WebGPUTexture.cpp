@@ -344,7 +344,8 @@ WebGPUTexture::WebGPUTexture(const SamplerType samplerType, const uint8_t levels
       mBlockWidth{ filament::backend::getBlockWidth(format) },
       mBlockHeight{ filament::backend::getBlockHeight(format) },
       mDefaultMipLevel{ 0 },
-      mDefaultBaseArrayLayer{ 0 } {
+      mDefaultBaseArrayLayer{ 0 },
+      mMipLevel{levels}{
     assert_invariant(
             samples == 1 ||
             samples == 4 &&

@@ -187,7 +187,7 @@ void initConfig(wgpu::SurfaceConfiguration& config, wgpu::Device const& device,
         wgpu::SurfaceCapabilities const& capabilities, wgpu::Extent2D const& surfaceSize,
         bool useSRGBColorSpace) {
     config.device = device;
-    config.usage = wgpu::TextureUsage::RenderAttachment;
+    config.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopyDst;
     config.width = surfaceSize.width;
     config.height = surfaceSize.height;
     config.format =
@@ -291,6 +291,17 @@ void WebGPUSwapChain::setExtent(wgpu::Extent2D const& currentSurfaceSize) {
         mDepthTexture = createDepthTexture(mDevice, currentSurfaceSize, mDepthFormat);
         mDepthTextureView = createDepthTextureView(mDepthTexture, mDepthFormat, mNeedStencil);
     }
+}
+wgpu::Texture WebGPUSwapChain::getCurrentSurfaceTexture(
+        wgpu::Extent2D const& currentSurfaceSize) {
+    setExtent(currentSurfaceSize);
+    wgpu::SurfaceTexture surfaceTexture;
+    mSurface.GetCurrentTexture(&surfaceTexture);
+    if (surfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal) {
+        // The texture is invalid, return null
+        return nullptr;
+    }
+    return surfaceTexture.texture;
 }
 
 wgpu::TextureView WebGPUSwapChain::getCurrentSurfaceTextureView(

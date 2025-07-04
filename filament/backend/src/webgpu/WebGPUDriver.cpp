@@ -144,9 +144,9 @@ void WebGPUDriver::finish(int /* dummy */) {
         mQueue.Submit(1, &mCommandBuffer);
         mCommandBuffer = nullptr;
         // create a new command buffer encoder to continue recording the next command for frame...
-        wgpu::CommandEncoderDescriptor commandEncoderDescriptor = { .label = "command_encoder" };
-        mCommandEncoder = mDevice.CreateCommandEncoder(&commandEncoderDescriptor);
-        assert_invariant(mCommandEncoder);
+//        wgpu::CommandEncoderDescriptor commandEncoderDescriptor = { .label = "command_encoder" };
+//        mCommandEncoder = mDevice.CreateCommandEncoder(&commandEncoderDescriptor);
+//        assert_invariant(mCommandEncoder);
     }
 }
 
@@ -986,7 +986,49 @@ void WebGPUDriver::makeCurrent(Handle<HwSwapChain> drawSch, Handle<HwSwapChain> 
     mSwapChain = swapChain;
     assert_invariant(mSwapChain);
     wgpu::Extent2D surfaceSize = mPlatform.getSurfaceExtent(mNativeWindow);
-    mTextureView = mSwapChain->getCurrentSurfaceTextureView(surfaceSize);
+
+    // Check if the surface has been resized or if our texture is uninitialized
+    if (mSceneColorTexture == nullptr || mSceneWidth != surfaceSize.width || mSceneHeight != surfaceSize.height) {
+        mSceneWidth = surfaceSize.width;
+        mSceneHeight = surfaceSize.height;
+
+        // If the texture exists, release it before recreating
+        if (mSceneColorTexture) {
+            mSceneColorTexture.Destroy();
+        }
+
+        // The number of mip levels. Calculated from the largest dimension.
+        uint32_t mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(mSceneWidth, mSceneHeight)))) + 1;
+
+        wgpu::TextureDescriptor textureDescriptor{
+            .label = "scene_color_texture",
+            .usage = wgpu::TextureUsage::RenderAttachment | // To be a render target
+                     wgpu::TextureUsage::TextureBinding |   // To be sampled from (for mip generation and effects)
+                     wgpu::TextureUsage::CopySrc,          // To be copied to the swap chain
+            .dimension = wgpu::TextureDimension::e2D,
+            .size = { mSceneWidth, mSceneHeight, 1 },
+            .format = mSwapChain->getColorFormat(), // Use the same format as the swapchain
+            .mipLevelCount = mipLevels,
+            .sampleCount = 1, // Assuming no MSAA for this buffer for now
+        };
+        mSceneColorTexture = mDevice.CreateTexture(&textureDescriptor);
+
+        wgpu::TextureViewDescriptor viewDesc{
+            .label = "scene_color_texture_view",
+            .format = textureDescriptor.format,
+            .dimension = wgpu::TextureViewDimension::e2D,
+            .baseMipLevel = 0,
+            .mipLevelCount = 1,
+            .baseArrayLayer = 0,
+            .arrayLayerCount = 1,
+        };
+        mSceneColorTextureView = mSceneColorTexture.CreateView(&viewDesc);
+    }
+
+    // Use our offscreen texture view for rendering, NOT the swapchain's.
+    mTextureView = mSceneColorTextureView;
+
+//    mTextureView = mSwapChain->getCurrentSurfaceTextureView(surfaceSize);
     assert_invariant(mTextureView);
 
     assert_invariant(mDefaultRenderTarget);
@@ -1012,6 +1054,29 @@ void WebGPUDriver::makeCurrent(Handle<HwSwapChain> drawSch, Handle<HwSwapChain> 
 }
 
 void WebGPUDriver::commit(Handle<HwSwapChain> sch) {
+    // -- START MODIFICATION --
+    // Get the current swap chain view to use as the copy destination
+    wgpu::Extent2D surfaceSize = mPlatform.getSurfaceExtent(mNativeWindow);
+
+    wgpu::Texture swapChainText = mSwapChain->getCurrentSurfaceTexture(surfaceSize);
+    if (!swapChainText) {
+        // Can happen if the surface is not ready. Just return.
+        return;
+    }
+
+    wgpu::TexelCopyTextureInfo source{
+        .texture = mSceneColorTexture,
+        .mipLevel = 0, // Copy from the base mip level
+    };
+    wgpu::TexelCopyTextureInfo destination{
+        .texture = swapChainText, // Get the underlying texture from the view
+        .mipLevel = 0,
+    };
+    wgpu::Extent3D copySize = { mSceneWidth, mSceneHeight, 1 };
+
+    // Add the copy command to the encoder before finishing it.
+    mCommandEncoder.CopyTextureToTexture(&source, &destination, &copySize);
+
     wgpu::CommandBufferDescriptor commandBufferDescriptor{
         .label = "command_buffer",
     };

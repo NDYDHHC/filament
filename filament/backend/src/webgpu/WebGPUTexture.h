@@ -104,7 +104,7 @@ public:
      * @return nullptr if a MSAA sidecar texture is not appliable, otherwise a view to one
      */
     [[nodiscard]] wgpu::TextureView makeMsaaSidecarTextureView(wgpu::Texture const&, uint8_t mipLevel, uint32_t arrayLayer) const;
-
+    uint8_t getMipLevelCount(){return mMipLevel;}
     [[nodiscard]] static wgpu::TextureFormat fToWGPUTextureFormat(
             filament::backend::TextureFormat const& fFormat);
 
@@ -144,7 +144,7 @@ private:
     // by sampleCount or something like that.
     // For now that complexity and cost is not warranted due to WebGPU's restrictions.
     wgpu::Texture mMsaaSidecarTexture = nullptr;
-
+    uint8_t mMipLevel = 0;
     [[nodiscard]] wgpu::TextureView makeTextureView(const uint8_t& baseLevel,
             const uint8_t& levelCount, const uint32_t& baseArrayLayer,
             const uint32_t& arrayLayerCount, SamplerType samplerType) const noexcept;
