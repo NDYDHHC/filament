@@ -378,7 +378,7 @@ const char* FMaterialInstance::getName() const noexcept {
 
 // ------------------------------------------------------------------------------------------------
 
-void FMaterialInstance::use(FEngine::DriverApi& driver) const {
+void FMaterialInstance::use(FEngine::DriverApi& driver, Variant variant) const {
 
     if (UTILS_UNLIKELY(mMissingSamplerDescriptors.any())) {
         std::call_once(mMissingSamplersFlag, [this] {
@@ -397,6 +397,10 @@ void FMaterialInstance::use(FEngine::DriverApi& driver) const {
             });
         });
         mMissingSamplerDescriptors.clear();
+    }
+
+    if (mMaterial->usePrecached(driver, variant)) {
+        return;
     }
 
     mDescriptorSet.bind(driver, DescriptorSetBindingPoints::PER_MATERIAL);

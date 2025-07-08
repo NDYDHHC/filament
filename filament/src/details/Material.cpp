@@ -788,6 +788,18 @@ void FMaterial::onQueryCallback(void* userdata, VariantList* pActiveVariants) {
 
 #endif // FILAMENT_ENABLE_MATDBG
 
+// TODO: probably make this inline
+bool FMaterial::usePrecached(backend::DriverApi& driver, Variant variant) const noexcept {
+    if (mMaterialDomain == MaterialDomain::SURFACE && !mIsDefaultMaterial &&
+            !mHasCustomDepthShader && Variant::isValidDepthVariant(variant)) {
+        FMaterial const* const pDefaultMaterial = mEngine.getDefaultMaterial();
+        FMaterialInstance const* const pDefaultInstance = pDefaultMaterial->getDefaultInstance();
+        pDefaultInstance->use(driver, variant);
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] Handle<HwProgram> FMaterial::getProgramWithMATDBG(Variant const variant) const noexcept {
 #if FILAMENT_ENABLE_MATDBG
     assert_invariant((size_t)variant.key < VARIANT_COUNT);

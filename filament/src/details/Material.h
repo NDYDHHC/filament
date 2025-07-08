@@ -150,6 +150,8 @@ public:
         return mCachedPrograms[variant.key];
     }
 
+    bool usePrecached(backend::DriverApi& driver, Variant variant) const noexcept;
+
     [[nodiscard]]
     backend::Handle<backend::HwProgram> getProgramWithMATDBG(Variant variant) const noexcept;
 

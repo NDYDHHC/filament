@@ -633,6 +633,8 @@ public:
     //! specify compute kernel group size
     MaterialBuilder& groupSize(filament::math::uint3 groupSize) noexcept;
 
+    MaterialBuilder& useDefaultDepthVariant() noexcept;
+
     /**
      * Build the material. If you are using the Filament engine with this library, you should use
      * the job system provided by Engine.
@@ -966,6 +968,8 @@ private:
     filament::UserVariantFilterMask mVariantFilter = {};
 
     bool mNoSamplerValidation = false;
+
+    bool mUseDefaultDepthVariant = false;
 };
 
 } // namespace filamat
