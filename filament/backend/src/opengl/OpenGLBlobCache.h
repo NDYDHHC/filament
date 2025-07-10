@@ -29,16 +29,27 @@ class OpenGLContext;
 
 class OpenGLBlobCache {
 public:
+    struct Blob {
+        using Ptr = std::unique_ptr<Blob, decltype(&::free)>;
+
+        static Ptr create(size_t size) noexcept { return Ptr{ (Blob*) malloc(size), &::free }; }
+
+        GLenum format;
+        char data[];
+    };
+
     explicit OpenGLBlobCache(OpenGLContext& gl) noexcept;
 
-    GLuint retrieve(BlobCacheKey* key, Platform& platform,
-            Program const& program) const noexcept;
+    Blob::Ptr retrieve(BlobCacheKey* outKey, size_t* outSize,
+            Platform& platform, Program const& program) const noexcept;
+
+    GLuint createProgram(BlobCacheKey key, Program const& program,
+            Blob const& blob, size_t blobSize) const noexcept;
 
     void insert(Platform& platform,
             BlobCacheKey const& key, GLuint program) noexcept;
 
 private:
-    struct Blob;
     bool mCachingSupported = false;
 };
 

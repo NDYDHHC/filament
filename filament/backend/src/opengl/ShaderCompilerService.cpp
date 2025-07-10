@@ -59,6 +59,8 @@ namespace filament::backend {
 
 using namespace utils;
 
+constexpr uint32_t MAX_NUM_SYNCHRONOUS_PROGRAMS_PER_FRAME = 1;
+
 // ------------------------------------------------------------------------------------------------
 
 static std::string to_string(bool const b) { return b ? "true" : "false"; }
@@ -254,23 +256,29 @@ void ShaderCompilerService::terminate() noexcept {
 
 ShaderCompilerService::program_token_t ShaderCompilerService::createProgram(
         CString const& name, Program&& program) {
-    auto& gl = mDriver.getContext();
-
     // Create a token. A callback condition (handle) is internally created upon token creation.
     auto token = std::make_shared<OpenGLProgramToken>(*this, name);
-    if (UTILS_UNLIKELY(gl.isES2())) {
+    if (UTILS_UNLIKELY(mDriver.getContext().isES2())) {
         token->attributes = std::move(program.getAttributes());
     }
 
     // Try retrieving the cached program blob if available.
-    token->gl.program = mBlobCache.retrieve(&token->key, mDriver.mPlatform, program);
-    if (token->gl.program) {
-        token->retrievedFromBlobCache = true;
-        return token;
+    size_t blobSize = 0;
+    OpenGLBlobCache::Blob::Ptr blob =
+            mBlobCache.retrieve(&token->key, &blobSize, mDriver.mPlatform, program);
+    if (blob) {
+        maybeCompileSynchronousProgram(token, std::move(program), std::move(blob), blobSize);
+    } else {
+        compileProgram(token, std::move(program));
     }
 
-    // Initiate program compilation.
+    return token;
+}
+
+void ShaderCompilerService::compileProgram(program_token_t const& token, Program&& program) noexcept {
+    auto& gl = mDriver.getContext();
     CompilerPriorityQueue const priorityQueue = program.getPriorityQueue();
+
     switch (mMode) {
         case Mode::THREAD_POOL: {
             mCompilerThreadPool.queue(priorityQueue, token,
@@ -322,8 +330,6 @@ ShaderCompilerService::program_token_t ShaderCompilerService::createProgram(
             assert_invariant(false);
         }
     }
-
-    return token;
 }
 
 GLuint ShaderCompilerService::getProgram(program_token_t& token) {
@@ -368,6 +374,7 @@ void ShaderCompilerService::tick() {
     if (UTILS_UNLIKELY(mMode != Mode::THREAD_POOL)) {
         executeTickOps();
     }
+    compilePendingSynchronousPrograms();
 }
 
 CallbackManager::Handle ShaderCompilerService::issueCallbackHandle() const noexcept {
@@ -422,6 +429,8 @@ void ShaderCompilerService::ensureTokenIsReady(program_token_t const& token) {
     if (token->gl.program) {
         return;// It's ready.
     }
+
+    // TODO(exv): HANDLE BLOB CACHE
 
     switch (mMode) {
         case Mode::THREAD_POOL: {
@@ -510,6 +519,50 @@ void ShaderCompilerService::executeTickOps() noexcept {
     }
     FILAMENT_TRACING_CONTEXT(FILAMENT_TRACING_CATEGORY_FILAMENT);
     FILAMENT_TRACING_VALUE(FILAMENT_TRACING_CATEGORY_FILAMENT, "ShaderCompilerService Jobs", ops.size());
+}
+
+void ShaderCompilerService::maybeCompileSynchronousProgram(
+        program_token_t const& token, Program&& program,
+        OpenGLBlobCache::Blob::Ptr blob, size_t blobSize) noexcept {
+    if (mNumProgramsCreatedSynchronouslyThisTick < MAX_NUM_SYNCHRONOUS_PROGRAMS_PER_FRAME) {
+        compileSynchronousProgram(token, std::move(program), std::move(blob), blobSize);
+    } else {
+        CompilerPriorityQueue const priorityQueue = program.getPriorityQueue();
+        auto const pos = std::lower_bound(mPendingSynchronousPrograms.begin(),
+                mPendingSynchronousPrograms.end(), priorityQueue,
+                [](ContainerType const& lhs, CompilerPriorityQueue const priorityQueue) {
+                    return std::get<0>(lhs) < priorityQueue;
+                });
+        mPendingSynchronousPrograms.emplace(pos,
+                token, std::move(program), std::move(program), blobSize);
+    }
+}
+
+void ShaderCompilerService::compileSynchronousProgram(
+        program_token_t const& token, Program&& program,
+        OpenGLBlobCache::Blob::Ptr blob, size_t blobSize) noexcept {
+    mNumProgramsCreatedSynchronouslyThisTick++;
+    token->gl.program = mBlobCache.createProgram(token->key, program, *blob, blobSize);
+    if (token->gl.program) {
+        token->retrievedFromBlobCache = true;
+    } else {
+        // Fall back to shader compilation.
+        compileProgram(token, std::move(program));
+    }
+}
+
+void ShaderCompilerService::compilePendingSynchronousPrograms() noexcept {
+    auto it = mPendingSynchronousPrograms.begin();
+    while (it != mPendingSynchronousPrograms.end() &&
+            mNumProgramsCreatedSynchronouslyThisTick < MAX_NUM_SYNCHRONOUS_PROGRAMS_PER_FRAME) {
+        compileSynchronousProgram(
+                std::get<0>(*it),
+                std::move(std::get<1>(*it)),
+                std::move(std::get<2>(*it)),
+                std::get<3>(*it));
+        it = mPendingSynchronousPrograms.erase(it);
+    }
+    mNumProgramsCreatedSynchronouslyThisTick = 0u;
 }
 
 /* static */ void ShaderCompilerService::compileShaders(OpenGLContext& context,
