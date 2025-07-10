@@ -262,11 +262,14 @@ ShaderCompilerService::program_token_t ShaderCompilerService::createProgram(
         token->attributes = std::move(program.getAttributes());
     }
 
-    // Try retrieving the cached program blob if available.
-    token->gl.program = mBlobCache.retrieve(&token->key, mDriver.mPlatform, program);
-    if (token->gl.program) {
-        token->retrievedFromBlobCache = true;
-        return token;
+    // In THREAD_POOL mode, the blob cache is checked in the thread pool.
+    if (mMode != Mode::THREAD_POOL) {
+        // Try retrieving the cached program blob if available.
+        token->gl.program = mBlobCache.retrieve(&token->key, mDriver.mPlatform, program);
+        if (token->gl.program) {
+            token->retrievedFromBlobCache = true;
+            return token;
+        }
     }
 
     // Initiate program compilation.
@@ -275,9 +278,14 @@ ShaderCompilerService::program_token_t ShaderCompilerService::createProgram(
         case Mode::THREAD_POOL: {
             mCompilerThreadPool.queue(priorityQueue, token,
                     [this, &gl, program = std::move(program), token]() mutable {
-                        compileShaders(gl, std::move(program.getShadersSource()),
-                                program.getSpecializationConstants(), program.isMultiview(), token);
-                        linkProgram(gl, token);
+                        token->gl.program = mBlobCache.retrieve(&token->key, mDriver.mPlatform, program);
+                        if (token->gl.program) {
+                            token->retrievedFromBlobCache = true;
+                        } else {
+                            compileShaders(gl, std::move(program.getShadersSource()),
+                                    program.getSpecializationConstants(), program.isMultiview(), token);
+                            linkProgram(gl, token);
+                        }
                         // Now `token->gl.program` must be populated, so we signal the completion
                         // of the linking. We don't need to check the result of the program here
                         // because it'll be done in the engine thread.
@@ -285,7 +293,9 @@ ShaderCompilerService::program_token_t ShaderCompilerService::createProgram(
                         // We try caching the program blob after sending the signal. This allows us
                         // to unblock the engine thread as soon as the token is ready while
                         // performing an expensive caching operation still in the pool.
-                        tryCachingProgram(mBlobCache, mDriver.mPlatform, token);
+                        if (!token->retrievedFromBlobCache) {
+                            tryCachingProgram(mBlobCache, mDriver.mPlatform, token);
+                        }
                     });
             break;
         }
@@ -344,15 +354,13 @@ GLuint ShaderCompilerService::getProgram(program_token_t& token) {
 
     assert_invariant(token);// This function should be called when the token is still alive.
 
-    // Finalize any pending shader compilation tasks only when the token was created without cache.
-    if (!token->retrievedFromBlobCache) {
-        if (token->compiler.mMode == Mode::THREAD_POOL) {
-            auto const job = token->compiler.mCompilerThreadPool.dequeue(token);
-            if (!job) {
-                // It's likely that the job was already completed. But it may be still being
-                // executed at this moment. Just try waiting for it to avoid a race.
-                token->wait();
-            }
+    // Finalize any pending shader compilation tasks.
+    if (token->compiler.mMode == Mode::THREAD_POOL) {
+        auto const job = token->compiler.mCompilerThreadPool.dequeue(token);
+        if (!job) {
+            // It's likely that the job was already completed. But it may be still being
+            // executed at this moment. Just try waiting for it to avoid a race.
+            token->wait();
         }
     }
 
